@@ -154,13 +154,11 @@ th{{background:#f6f8fa}}
 <body><main>
 <h1>GenDiff</h1><div class="status {status_class}">{status}</div>
 <section><h2>Summary</h2><dl class="summary">
-<dt>Relationship</dt><dd>{escape(result.relationship)}</dd>
 <dt>Identity overlap</dt><dd>{result.identity_overlap:.1%}</dd>
-<dt>Profile</dt><dd>{escape(result.profile)}</dd>
 <dt>{escape(result.left_label)}</dt>
-<dd>{escape(str(result.left))} · {result.left_records:,} records</dd>
+<dd>{result.left_records:,} records</dd>
 <dt>{escape(result.right_label)}</dt>
-<dd>{escape(str(result.right))} · {result.right_records:,} records</dd>
+<dd>{result.right_records:,} records</dd>
 <dt>Logical records</dt><dd>{"same" if result.content_equal else "different"}</dd>
 <dt>Structural header</dt><dd>{"same" if result.structure_equal else "different"}</dd>
 <dt>Metadata header</dt>
@@ -187,7 +185,7 @@ def render_svg(result: ComparisonResult) -> str:
             (f"Only in {result.right_label}", details.right_only, "#8250df"),
         ]
     field_values = list((details.field_changes if details else {}).items())[:8]
-    height = 520 if not field_values else 535 + len(field_values) * 36
+    height = 460 if not field_values else 494 + len(field_values) * 36
     status = "Equivalent" if result.equivalent else "Different"
     status_color = "#1a7f37" if result.equivalent else "#cf222e"
     overlap_width = 920 * max(0.0, min(1.0, result.identity_overlap))
@@ -196,7 +194,7 @@ def render_svg(result: ComparisonResult) -> str:
 
     record_rows = []
     for index, (name, value, color) in enumerate(record_values):
-        y = 327 + index * 38
+        y = 300 + index * 38
         width = 550 * value / record_maximum
         record_rows.append(
             f'<text x="54" y="{y}" class="label">{escape(_short(name))}</text>'
@@ -208,7 +206,7 @@ def render_svg(result: ComparisonResult) -> str:
         )
 
     field_rows = []
-    field_start = 510
+    field_start = 480
     for index, (name, value) in enumerate(field_values):
         y = field_start + index * 36
         width = 550 * value / field_maximum
@@ -224,17 +222,14 @@ def render_svg(result: ComparisonResult) -> str:
     field_section = ""
     if field_rows:
         field_section = (
-            '<text x="40" y="476" class="section">Changed fields</text>'
+            '<text x="40" y="447" class="section">Changed fields</text>'
             + "".join(field_rows)
         )
     title_text = escape(
         f"GenDiff comparison: {result.left_label} and {result.right_label}"
     )
-    relationship_text = escape(f"{result.relationship} · {result.profile} profile")
     left_name = escape(_short(result.left_label))
     right_name = escape(_short(result.right_label))
-    left_path = escape(result.left.name)
-    right_path = escape(result.right.name)
     record_section = "".join(record_rows)
     if not record_section:
         record_section = (
@@ -260,22 +255,21 @@ text{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#1
 <text x="48" y="70" class="title">GenDiff</text>
 <text x="1048" y="66" class="status" text-anchor="end"
  style="fill:{status_color}">{status}</text>
-<text x="48" y="96" class="muted">{relationship_text}</text>
-<rect x="48" y="122" width="488" height="88" rx="8" fill="#f6f8fa"
+<rect x="48" y="88" width="488" height="86" rx="8" fill="#f6f8fa"
  stroke="#d0d7de"/>
-<text x="68" y="151" class="sample">{left_name}</text>
-<text x="68" y="177" class="count">{result.left_records:,}</text>
-<text x="68" y="195" class="muted">records · {left_path}</text>
-<rect x="560" y="122" width="488" height="88" rx="8" fill="#f6f8fa"
+<text x="68" y="118" class="sample">{left_name}</text>
+<text x="68" y="148" class="count">{result.left_records:,}</text>
+<text x="68" y="165" class="muted">records</text>
+<rect x="560" y="88" width="488" height="86" rx="8" fill="#f6f8fa"
  stroke="#d0d7de"/>
-<text x="580" y="151" class="sample">{right_name}</text>
-<text x="580" y="177" class="count">{result.right_records:,}</text>
-<text x="580" y="195" class="muted">records · {right_path}</text>
-<text x="48" y="242" class="section">Identity overlap</text>
-<rect x="48" y="257" width="920" height="18" rx="6" fill="#eaeef2"/>
-<rect x="48" y="257" width="{overlap_width:.1f}" height="18" rx="6" fill="#0969da"/>
-<text x="1048" y="272" class="value">{result.identity_overlap:.1%}</text>
-<text x="40" y="302" class="section">Record comparison</text>
+<text x="580" y="118" class="sample">{right_name}</text>
+<text x="580" y="148" class="count">{result.right_records:,}</text>
+<text x="580" y="165" class="muted">records</text>
+<text x="48" y="206" class="section">Identity overlap</text>
+<rect x="48" y="220" width="920" height="18" rx="6" fill="#eaeef2"/>
+<rect x="48" y="220" width="{overlap_width:.1f}" height="18" rx="6" fill="#0969da"/>
+<text x="1048" y="235" class="value">{result.identity_overlap:.1%}</text>
+<text x="40" y="270" class="section">Record comparison</text>
 {record_section}
 {field_section}
 </svg>

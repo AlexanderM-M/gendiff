@@ -51,7 +51,10 @@ def test_html_report_is_written_and_protected(capsys, tmp_path: Path) -> None:
     )
 
     assert main([str(vcf), str(vcf), "--html", str(report)]) == 0
-    assert "<!doctype html>" in report.read_text()
+    content = report.read_text()
+    assert "<!doctype html>" in content
+    assert "<dt>Profile</dt>" not in content
+    assert str(vcf) not in content
     assert main([str(vcf), str(vcf), "--html", str(report)]) == 2
     assert "output exists" in capsys.readouterr().err
 
@@ -126,6 +129,9 @@ def test_svg_uses_inferred_and_custom_sample_names(capsys, tmp_path: Path) -> No
     assert "Only in sample-b: 1" in output
     assert "sample-a" in svg
     assert "sample-b" in svg
+    assert "strict profile" not in svg
+    assert "sample-a.merged.vcf" not in svg
+    assert "sample-b.merged.vcf" not in svg
     assert 'x="1040"' in svg
     assert 'x="882"' not in svg
 
