@@ -11,15 +11,17 @@ from tempfile import TemporaryDirectory
 from typing import Any, Dict, Iterator, Tuple
 
 
+def safe_slug(value: str) -> str:
+    """Return a short, filesystem-safe name."""
+    cleaned = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return cleaned or "sample"
+
+
 def sample_slugs(left_label: str, right_label: str) -> Tuple[str, str]:
-    """Return short, filesystem-safe, distinct sample names."""
+    """Return filesystem-safe, distinct sample names."""
 
-    def slug(value: str) -> str:
-        cleaned = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-        return cleaned or "sample"
-
-    left = slug(left_label)
-    right = slug(right_label)
+    left = safe_slug(left_label)
+    right = safe_slug(right_label)
     if left == right:
         return f"{left}-a", f"{right}-b"
     return left, right
