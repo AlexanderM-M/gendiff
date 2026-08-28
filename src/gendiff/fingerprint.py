@@ -46,6 +46,14 @@ def digest(value: Any) -> int:
     )
 
 
+def digest_parts(parts: list[int]) -> int:
+    """Hash already-computed field digests into one logical record digest."""
+    hasher = hashlib.blake2b(digest_size=32, person=b"gendiff-rec-v1")
+    for part in parts:
+        hasher.update(part.to_bytes(32, "big"))
+    return int.from_bytes(hasher.digest(), "big")
+
+
 @dataclass(frozen=True)
 class Fingerprint:
     count: int
@@ -64,7 +72,9 @@ class FingerprintBuilder:
         self._xor = 0
 
     def add(self, value: Any) -> None:
-        item = digest(value)
+        self.add_digest(digest(value))
+
+    def add_digest(self, item: int) -> None:
         self._count += 1
         self._total = (self._total + item) % _MODULUS
         self._squares = (self._squares + item * item) % _MODULUS

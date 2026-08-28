@@ -22,8 +22,10 @@ def _kind(path: Path) -> str:
 
 
 def compare_files(
-    left: Path, right: Path, reference: Optional[Path] = None
+    left: Path, right: Path, reference: Optional[Path] = None, threads: int = 2
 ) -> ComparisonResult:
+    if threads < 1:
+        raise GenDiffError("threads must be at least 1")
     for path in (left, right):
         if not path.is_file():
             raise GenDiffError(f"file not found: {path}")
@@ -38,5 +40,5 @@ def compare_files(
         raise GenDiffError("--reference is only valid for BAM/CRAM comparisons")
 
     if left_kind == "alignment":
-        return compare_alignments(left, right, reference)
-    return compare_variants(left, right)
+        return compare_alignments(left, right, reference, threads)
+    return compare_variants(left, right, threads)

@@ -48,3 +48,15 @@ def test_alignment_detects_changed_mapping_quality(tmp_path: Path) -> None:
 
     assert not result.equivalent
     assert result.changed_fields == ["mapping_quality"]
+
+
+def test_single_and_parallel_scans_agree(tmp_path: Path) -> None:
+    left = tmp_path / "left.bam"
+    right = tmp_path / "right.bam"
+    _write_bam(left, [(0, 20), (1, 30)], "tool")
+    _write_bam(right, [(0, 20), (1, 40)], "tool")
+
+    sequential = compare_files(left, right, threads=1)
+    parallel = compare_files(left, right, threads=2)
+
+    assert sequential == parallel

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
 import pysam
 
-from gendiff.fingerprint import Fingerprint, FingerprintBuilder, digest, normalize
+from gendiff.fingerprint import Fingerprint, FingerprintBuilder, digest, digest_parts
 from gendiff.model import ComparisonResult
 
 
@@ -49,24 +50,38 @@ def _record_values(record: pysam.VariantRecord) -> Dict[str, Any]:
 
 
 def _scan(
-    path: Path,
+    path: Path, threads: int
 ) -> Tuple[Dict[str, Fingerprint], int, Dict[str, Any], Dict[str, Any]]:
     builders = {name: FingerprintBuilder() for name in ("record",) + _FIELDS}
-    with pysam.VariantFile(str(path)) as handle:
+    with pysam.VariantFile(str(path), threads=threads) as handle:
         structural = _structural_header(handle.header)
         metadata = _metadata_header(handle.header)
         for record in handle:
-            values = normalize(_record_values(record))
-            builders["record"].add(values)
+            values = _record_values(record)
+            parts = []
             for name in _FIELDS:
-                builders[name].add(values[name])
+                field_digest = digest(values[name])
+                builders[name].add_digest(field_digest)
+                parts.append(field_digest)
+            builders["record"].add_digest(digest_parts(parts))
     fingerprints = {name: builder.finish() for name, builder in builders.items()}
     return fingerprints, fingerprints["record"].count, structural, metadata
 
 
-def compare_variants(left: Path, right: Path) -> ComparisonResult:
-    left_fp, left_count, left_structure, left_metadata = _scan(left)
-    right_fp, right_count, right_structure, right_metadata = _scan(right)
+def compare_variants(left: Path, right: Path, threads: int) -> ComparisonResult:
+    if threads == 1:
+        left_scan = _scan(left, 1)
+        right_scan = _scan(right, 1)
+    else:
+        input_threads = max(1, threads // 2)
+        with ProcessPoolExecutor(max_workers=2) as executor:
+            left_future = executor.submit(_scan, left, input_threads)
+            right_future = executor.submit(_scan, right, input_threads)
+            left_scan = left_future.result()
+            right_scan = right_future.result()
+
+    left_fp, left_count, left_structure, left_metadata = left_scan
+    right_fp, right_count, right_structure, right_metadata = right_scan
     changed = [name for name in _FIELDS if left_fp[name] != right_fp[name]]
     return ComparisonResult(
         kind="variant",

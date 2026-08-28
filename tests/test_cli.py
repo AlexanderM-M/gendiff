@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from gendiff.cli import main
 
 
@@ -24,3 +26,16 @@ def test_json_is_machine_readable(capsys, tmp_path: Path) -> None:
     assert status == 0
     assert output["equivalent"] is True
     assert output["type"] == "variant"
+
+
+def test_threads_must_be_positive(tmp_path: Path) -> None:
+    vcf = tmp_path / "empty.vcf"
+    vcf.write_text(
+        "##fileformat=VCFv4.3\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+    )
+
+    with pytest.raises(SystemExit) as error:
+        main([str(vcf), str(vcf), "--threads", "0"])
+
+    assert error.value.code == 2

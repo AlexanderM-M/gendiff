@@ -39,6 +39,7 @@ pytest
 gendiff OLD NEW
 gendiff old.cram new.cram --reference reference.fa
 gendiff old.vcf.gz new.bcf --json
+gendiff old.bam new.bam --threads 8
 ```
 
 Exit status is `0` when inputs are semantically equivalent, `1` when they differ,
@@ -48,7 +49,8 @@ workflow integration.
 GenDiff compares all logical record fields and the structural parts of each
 header. Record ordering, file encoding, and non-structural header metadata do not
 affect equivalence. It reports which field groups differ without loading complete
-files into memory.
+files into memory. Two worker threads are used by default; increase `--threads`
+when comparing large files on a machine or allocated cluster job with more cores.
 
 GenDiff does not currently normalize alternative variant representations. Run
 variant normalization before comparing files when equivalent variants may be

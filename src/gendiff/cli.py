@@ -11,6 +11,13 @@ from gendiff.compare import GenDiffError, compare_files
 from gendiff.model import ComparisonResult
 
 
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gendiff",
@@ -20,6 +27,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("right", type=Path, help="second file")
     parser.add_argument(
         "--reference", type=Path, help="reference FASTA used to decode CRAM"
+    )
+    parser.add_argument(
+        "--threads",
+        type=_positive_int,
+        default=2,
+        help="total worker threads (default: 2)",
     )
     parser.add_argument("--json", action="store_true", help="write JSON output")
     parser.add_argument(
@@ -50,7 +63,7 @@ def _render(result: ComparisonResult) -> str:
 def main(argv: Optional[List[str]] = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        result = compare_files(args.left, args.right, args.reference)
+        result = compare_files(args.left, args.right, args.reference, args.threads)
     except (GenDiffError, OSError, ValueError) as error:
         print(f"gendiff: error: {error}", file=sys.stderr)
         return 2
