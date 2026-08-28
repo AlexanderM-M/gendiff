@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+.venv/
+build/
+dist/
+*.bam
+*.bai
+*.bcf
+*.cram
+*.crai
+*.vcf.gz
+*.tbi
