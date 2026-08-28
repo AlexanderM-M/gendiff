@@ -17,18 +17,44 @@ class DifferenceDetails:
     examples: List[Dict[str, Any]] = field(default_factory=list)
     loci: List[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, left_label: str, right_label: str) -> Dict[str, Any]:
+        statuses = {
+            "left_only": "only_in_first",
+            "right_only": "only_in_second",
+        }
+        examples = [
+            {
+                "identity": example["identity"],
+                "status": statuses.get(example["status"], example["status"]),
+                "changed_fields": example["changed_fields"],
+                "first": {
+                    "label": left_label,
+                    "record": example["left"],
+                },
+                "second": {
+                    "label": right_label,
+                    "record": example["right"],
+                },
+            }
+            for example in self.examples
+        ]
         return {
             "records": {
                 "identical": self.identical,
                 "modified": self.modified,
-                "left_only": self.left_only,
-                "right_only": self.right_only,
+                "only_in_first": {
+                    "label": left_label,
+                    "count": self.left_only,
+                },
+                "only_in_second": {
+                    "label": right_label,
+                    "count": self.right_only,
+                },
             },
             "field_changes": self.field_changes,
             "top_regions": self.top_regions,
             "sample_changes": self.sample_changes,
-            "examples": self.examples,
+            "examples": examples,
         }
 
 
@@ -37,6 +63,8 @@ class ComparisonResult:
     kind: str
     left: Path
     right: Path
+    left_label: str
+    right_label: str
     left_records: int
     right_records: int
     content_equal: bool
@@ -56,9 +84,18 @@ class ComparisonResult:
         result = {
             "equivalent": self.equivalent,
             "type": self.kind,
-            "left": str(self.left),
-            "right": str(self.right),
-            "records": {"left": self.left_records, "right": self.right_records},
+            "inputs": [
+                {
+                    "label": self.left_label,
+                    "path": str(self.left),
+                    "records": self.left_records,
+                },
+                {
+                    "label": self.right_label,
+                    "path": str(self.right),
+                    "records": self.right_records,
+                },
+            ],
             "logical_records_equal": self.content_equal,
             "structural_header_equal": self.structure_equal,
             "metadata_header_equal": self.metadata_equal,
@@ -68,5 +105,5 @@ class ComparisonResult:
             "profile": self.profile,
         }
         if self.details is not None:
-            result["details"] = self.details.to_dict()
+            result["details"] = self.details.to_dict(self.left_label, self.right_label)
         return result

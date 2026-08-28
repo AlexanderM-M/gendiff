@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="520" viewBox="0 0 1120 520" role="img" aria-labelledby="title description">
+  <title id="title">GenDiff comparison: Sample A and Sample B</title>
+  <desc id="description">Different datasets with 0.0% identity overlap.</desc>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1f2328 }
+    .title { font-size: 28px; font-weight: 700 }
+    .status { font-size: 17px; font-weight: 700; fill: #cf222e }
+    .sample { font-size: 19px; font-weight: 700 }
+    .count { font-size: 24px; font-weight: 700 }
+    .muted { font-size: 13px; fill: #59636e }
+    .section { font-size: 17px; font-weight: 700 }
+    .label { font-size: 13px }
+    .value { font-size: 13px; font-weight: 700; text-anchor: end }
+  </style>
+  <rect width="1120" height="520" fill="#f6f8fa"/>
+  <rect x="24" y="24" width="1072" height="472" rx="12" fill="#fff" stroke="#d0d7de"/>
+  <text x="48" y="70" class="title">GenDiff</text>
+  <text x="1048" y="66" class="status" text-anchor="end">Different</text>
+  <text x="48" y="96" class="muted">different datasets · strict profile</text>
+  <rect x="48" y="122" width="488" height="88" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="68" y="151" class="sample">Sample A</text>
+  <text x="68" y="177" class="count">9,398</text>
+  <text x="68" y="195" class="muted">records · sample-a.merged.bam</text>
+  <rect x="560" y="122" width="488" height="88" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="580" y="151" class="sample">Sample B</text>
+  <text x="580" y="177" class="count">147,213</text>
+  <text x="580" y="195" class="muted">records · sample-b.merged.bam</text>
+  <text x="48" y="242" class="section">Identity overlap</text>
+  <rect x="48" y="257" width="920" height="18" rx="6" fill="#eaeef2"/>
+  <text x="1048" y="272" class="value">0.0%</text>
+  <text x="40" y="302" class="section">Record comparison</text>
+  <text x="54" y="327" class="label">Identical</text>
+  <rect x="310" y="312" width="550" height="16" rx="4" fill="#eaeef2"/>
+  <text x="882" y="327" class="value">0</text>
+  <text x="54" y="365" class="label">Modified</text>
+  <rect x="310" y="350" width="550" height="16" rx="4" fill="#eaeef2"/>
+  <text x="882" y="365" class="value">0</text>
+  <text x="54" y="403" class="label">Only in Sample A</text>
+  <rect x="310" y="388" width="550" height="16" rx="4" fill="#eaeef2"/>
+  <rect x="310" y="388" width="35.1" height="16" rx="4" fill="#0969da"/>
+  <text x="882" y="403" class="value">9,398</text>
+  <text x="54" y="441" class="label">Only in Sample B</text>
+  <rect x="310" y="426" width="550" height="16" rx="4" fill="#eaeef2"/>
+  <rect x="310" y="426" width="550" height="16" rx="4" fill="#8250df"/>
+  <text x="882" y="441" class="value">147,213</text>
+</svg>

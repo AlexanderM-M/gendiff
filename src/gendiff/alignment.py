@@ -205,6 +205,8 @@ def _scan_indexed_pair(
     fields: Sequence[str],
     ignore_tags: Sequence[str],
     progress: bool,
+    left_label: str,
+    right_label: str,
 ) -> Optional[tuple[_ScanResult, _ScanResult]]:
     workers_per_input = max(1, threads // 2)
     left_chunks = _region_chunks(left, reference, workers_per_input)
@@ -223,7 +225,7 @@ def _scan_indexed_pair(
                 ignore_tags,
                 None,
                 progress,
-                f"left:{index + 1}",
+                f"{left_label}:{index + 1}",
                 regions,
             )
             for index, regions in enumerate(left_chunks)
@@ -238,7 +240,7 @@ def _scan_indexed_pair(
                 ignore_tags,
                 None,
                 progress,
-                f"right:{index + 1}",
+                f"{right_label}:{index + 1}",
                 regions,
             )
             for index, regions in enumerate(right_chunks)
@@ -258,10 +260,20 @@ def _scan_pair(
     left_details: Optional[Path],
     right_details: Optional[Path],
     progress: bool,
+    left_label: str,
+    right_label: str,
 ) -> tuple[_ScanResult, _ScanResult]:
     if threads > 2 and left_details is None and right_details is None:
         indexed = _scan_indexed_pair(
-            left, right, reference, threads, fields, ignore_tags, progress
+            left,
+            right,
+            reference,
+            threads,
+            fields,
+            ignore_tags,
+            progress,
+            left_label,
+            right_label,
         )
         if indexed is not None:
             return indexed
@@ -269,15 +281,15 @@ def _scan_pair(
     arguments = (reference, input_threads, fields, ignore_tags)
     if threads == 1:
         return (
-            _scan(left, *arguments, left_details, progress, "left"),
-            _scan(right, *arguments, right_details, progress, "right"),
+            _scan(left, *arguments, left_details, progress, left_label),
+            _scan(right, *arguments, right_details, progress, right_label),
         )
     with ProcessPoolExecutor(max_workers=2) as executor:
         left_future = executor.submit(
-            _scan, left, *arguments, left_details, progress, "left"
+            _scan, left, *arguments, left_details, progress, left_label
         )
         right_future = executor.submit(
-            _scan, right, *arguments, right_details, progress, "right"
+            _scan, right, *arguments, right_details, progress, right_label
         )
         return left_future.result(), right_future.result()
 
@@ -289,6 +301,8 @@ def compare_alignments(
     threads: int,
     fields: Sequence[str],
     profile: str,
+    left_label: str,
+    right_label: str,
     ignore_tags: Sequence[str],
     explain: bool,
     max_examples: int,
@@ -308,6 +322,8 @@ def compare_alignments(
             left_details,
             right_details,
             progress,
+            left_label,
+            right_label,
         )
         changed = [
             name
@@ -327,6 +343,8 @@ def compare_alignments(
         kind="alignment",
         left=left,
         right=right,
+        left_label=left_label,
+        right_label=right_label,
         left_records=left_scan.count,
         right_records=right_scan.count,
         content_equal=content_equal,

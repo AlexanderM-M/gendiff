@@ -10,7 +10,7 @@ from gendiff import __version__
 from gendiff.compare import GenDiffError, compare_files
 from gendiff.model import ComparisonResult
 from gendiff.profiles import ALL_PROFILES
-from gendiff.report import render_html, render_igv_batch, write_text
+from gendiff.report import render_html, render_igv_batch, render_svg, write_text
 
 
 def _positive_int(value: str) -> int:
@@ -32,8 +32,10 @@ def _parser() -> argparse.ArgumentParser:
         prog="gendiff",
         description="Compare the logical contents of two genomics files.",
     )
-    parser.add_argument("left", type=Path, help="first BAM, CRAM, VCF, or BCF")
-    parser.add_argument("right", type=Path, help="second file")
+    parser.add_argument("sample_a", type=Path, help="first BAM, CRAM, VCF, or BCF")
+    parser.add_argument("sample_b", type=Path, help="second file")
+    parser.add_argument("--name-a", help="display name for the first sample")
+    parser.add_argument("--name-b", help="display name for the second sample")
     parser.add_argument(
         "--reference", type=Path, help="reference FASTA for CRAM, normalization, or IGV"
     )
@@ -86,6 +88,7 @@ def _parser() -> argparse.ArgumentParser:
         help="temporary storage for detailed record matching",
     )
     parser.add_argument("--html", type=Path, help="write a self-contained HTML report")
+    parser.add_argument("--svg", type=Path, help="write a standalone SVG summary")
     parser.add_argument("--igv-batch", type=Path, help="write an IGV batch file")
     parser.add_argument("--force", action="store_true", help="replace output reports")
     parser.add_argument("--json", action="store_true", help="write JSON output")
@@ -106,7 +109,9 @@ def _render(result: ComparisonResult) -> str:
         f"Relationship: {result.relationship}",
         f"Identity overlap: {result.identity_overlap:.1%}",
         f"Profile: {result.profile}",
-        f"Records: {result.left_records} / {result.right_records}",
+        "Inputs:",
+        f"  {result.left_label}: {result.left} ({result.left_records:,} records)",
+        f"  {result.right_label}: {result.right} ({result.right_records:,} records)",
         f"Logical records: {_status(result.content_equal)}",
         f"Structural header: {_status(result.structure_equal)}",
         f"Metadata header: {_status(result.metadata_equal)} (informational)",
@@ -121,8 +126,8 @@ def _render(result: ComparisonResult) -> str:
                 "Record differences:",
                 f"  Identical: {details.identical:,}",
                 f"  Modified: {details.modified:,}",
-                f"  Only in left: {details.left_only:,}",
-                f"  Only in right: {details.right_only:,}",
+                f"  Only in {result.left_label}: {details.left_only:,}",
+                f"  Only in {result.right_label}: {details.right_only:,}",
             ]
         )
         if details.field_changes:
@@ -143,19 +148,22 @@ def _render(result: ComparisonResult) -> str:
 def main(argv: Optional[List[str]] = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        for output in (args.html, args.igv_batch):
+        outputs = [output for output in (args.html, args.svg, args.igv_batch) if output]
+        for output in outputs:
             if output and output.exists() and not args.force:
                 raise FileExistsError(
                     f"output exists: {output}; use --force to replace it"
                 )
-        if args.html and args.igv_batch and args.html == args.igv_batch:
-            raise ValueError("--html and --igv-batch must use different paths")
+        if len(set(outputs)) != len(outputs):
+            raise ValueError("report outputs must use different paths")
         if args.igv_batch and args.reference is None:
             raise ValueError("--igv-batch requires --reference")
-        explain = args.explain or args.html is not None or args.igv_batch is not None
+        explain = any(
+            (args.explain, args.html is not None, args.svg is not None, args.igv_batch)
+        )
         result = compare_files(
-            args.left,
-            args.right,
+            args.sample_a,
+            args.sample_b,
             args.reference,
             args.threads,
             profile=args.profile,
@@ -166,8 +174,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             max_examples=args.max_examples,
             progress=args.progress,
             temp_dir=args.temp_dir,
+            left_label=args.name_a,
+            right_label=args.name_b,
         )
         html_report = render_html(result) if args.html else None
+        svg_report = render_svg(result) if args.svg else None
         igv_report = (
             render_igv_batch(result, args.reference)
             if args.igv_batch and args.reference is not None
@@ -176,6 +187,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.html:
             write_text(args.html, html_report or "", args.force)
             print(f"Wrote {args.html}", file=sys.stderr)
+        if args.svg:
+            write_text(args.svg, svg_report or "", args.force)
+            print(f"Wrote {args.svg}", file=sys.stderr)
         if args.igv_batch:
             write_text(args.igv_batch, igv_report or "", args.force)
             print(f"Wrote {args.igv_batch}", file=sys.stderr)

@@ -150,20 +150,22 @@ def _scan_pair(
     left_details: Optional[Path],
     right_details: Optional[Path],
     progress: bool,
+    left_label: str,
+    right_label: str,
 ) -> tuple[_ScanResult, _ScanResult]:
     input_threads = max(1, threads // 2)
     arguments = (input_threads, fields, ignore_info)
     if threads == 1:
         return (
-            _scan(left, *arguments, left_details, progress, "left"),
-            _scan(right, *arguments, right_details, progress, "right"),
+            _scan(left, *arguments, left_details, progress, left_label),
+            _scan(right, *arguments, right_details, progress, right_label),
         )
     with ProcessPoolExecutor(max_workers=2) as executor:
         left_future = executor.submit(
-            _scan, left, *arguments, left_details, progress, "left"
+            _scan, left, *arguments, left_details, progress, left_label
         )
         right_future = executor.submit(
-            _scan, right, *arguments, right_details, progress, "right"
+            _scan, right, *arguments, right_details, progress, right_label
         )
         return left_future.result(), right_future.result()
 
@@ -192,6 +194,8 @@ def compare_variants(
     threads: int,
     fields: Sequence[str],
     profile: str,
+    left_label: str,
+    right_label: str,
     ignore_info: Sequence[str],
     explain: bool,
     max_examples: int,
@@ -219,6 +223,8 @@ def compare_variants(
             left_details,
             right_details,
             progress,
+            left_label,
+            right_label,
         )
         changed = [
             name
@@ -238,6 +244,8 @@ def compare_variants(
         kind="variant",
         left=left,
         right=right,
+        left_label=left_label,
+        right_label=right_label,
         left_records=left_scan.count,
         right_records=right_scan.count,
         content_equal=content_equal,

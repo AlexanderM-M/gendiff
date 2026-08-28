@@ -25,6 +25,10 @@ def test_json_is_machine_readable(capsys, tmp_path: Path) -> None:
     assert status == 0
     assert output["equivalent"] is True
     assert output["type"] == "variant"
+    assert [item["label"] for item in output["inputs"]] == [
+        "empty (A)",
+        "empty (B)",
+    ]
 
 
 def test_threads_must_be_positive(tmp_path: Path) -> None:
@@ -99,3 +103,48 @@ def test_igv_validation_happens_before_writing_reports(tmp_path: Path) -> None:
     assert status == 2
     assert not report.exists()
     assert not batch.exists()
+
+
+def test_svg_uses_inferred_and_custom_sample_names(capsys, tmp_path: Path) -> None:
+    first = tmp_path / "sample-a.merged.vcf"
+    second = tmp_path / "sample-b.merged.vcf"
+    figure = tmp_path / "comparison.svg"
+    header = (
+        "##fileformat=VCFv4.3\n"
+        "##contig=<ID=chr1,length=20>\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+    )
+    first.write_text(header + "chr1\t2\t.\tA\tC\t.\tPASS\t.\n")
+    second.write_text(header + "chr1\t4\t.\tA\tC\t.\tPASS\t.\n")
+
+    status = main([str(first), str(second), "--svg", str(figure)])
+    output = capsys.readouterr().out
+
+    assert status == 1
+    assert "Only in sample-a: 1" in output
+    assert "Only in sample-b: 1" in output
+    assert "sample-a" in figure.read_text()
+    assert "sample-b" in figure.read_text()
+
+    status = main(
+        [
+            str(first),
+            str(second),
+            "--name-a",
+            "Control",
+            "--name-b",
+            "Treated",
+            "--svg",
+            str(figure),
+            "--force",
+            "--json",
+        ]
+    )
+    result = json.loads(capsys.readouterr().out)
+
+    assert status == 1
+    assert "Control" in figure.read_text()
+    assert "Treated" in figure.read_text()
+    assert [item["label"] for item in result["inputs"]] == ["Control", "Treated"]
+    assert result["details"]["records"]["only_in_first"]["label"] == "Control"
+    assert result["details"]["examples"][0]["first"]["label"] == "Control"

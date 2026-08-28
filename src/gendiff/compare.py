@@ -13,6 +13,56 @@ class GenDiffError(Exception):
     """Raised when inputs cannot be compared."""
 
 
+_FORMAT_SUFFIXES = (".vcf.gz", ".cram", ".bam", ".bcf", ".vcf")
+_PROCESSING_SUFFIXES = (
+    ".merged",
+    ".sorted",
+    ".deduplicated",
+    ".dedup",
+    ".markdup",
+    ".aligned",
+)
+
+
+def _inferred_label(path: Path) -> str:
+    label = path.name
+    lowered = label.lower()
+    for suffix in _FORMAT_SUFFIXES:
+        if lowered.endswith(suffix):
+            label = label[: -len(suffix)]
+            break
+    lowered = label.lower()
+    for suffix in _PROCESSING_SUFFIXES:
+        if lowered.endswith(suffix):
+            label = label[: -len(suffix)]
+            break
+    return label or path.name
+
+
+def _input_labels(
+    left: Path,
+    right: Path,
+    left_label: Optional[str],
+    right_label: Optional[str],
+) -> tuple[str, str]:
+    for value, option in (
+        (left_label, "--name-a"),
+        (right_label, "--name-b"),
+    ):
+        if value is not None and not value.strip():
+            raise GenDiffError(f"{option} cannot be empty")
+    first = left_label.strip() if left_label else _inferred_label(left)
+    second = right_label.strip() if right_label else _inferred_label(right)
+    if first == second:
+        if left.resolve() != right.resolve():
+            first = f"{left.parent.name}/{first}"
+            second = f"{right.parent.name}/{second}"
+        else:
+            first = f"{first} (A)"
+            second = f"{second} (B)"
+    return first, second
+
+
 def _kind(path: Path) -> str:
     name = path.name.lower()
     if name.endswith((".bam", ".cram")):
@@ -36,6 +86,8 @@ def compare_files(
     max_examples: int = 10,
     progress: bool = False,
     temp_dir: Optional[Path] = None,
+    left_label: Optional[str] = None,
+    right_label: Optional[str] = None,
 ) -> ComparisonResult:
     if threads < 1:
         raise GenDiffError("threads must be at least 1")
@@ -48,6 +100,7 @@ def compare_files(
         raise GenDiffError("max examples must be at least 0")
     if temp_dir is not None and not temp_dir.is_dir():
         raise GenDiffError(f"temporary directory not found: {temp_dir}")
+    labels = _input_labels(left, right, left_label, right_label)
 
     left_kind = _kind(left)
     right_kind = _kind(right)
@@ -70,6 +123,7 @@ def compare_files(
             threads,
             fields,
             profile,
+            *labels,
             ignore_tags,
             explain,
             max_examples,
@@ -95,6 +149,7 @@ def compare_files(
         threads,
         fields,
         profile,
+        *labels,
         ignore_info,
         explain,
         max_examples,
