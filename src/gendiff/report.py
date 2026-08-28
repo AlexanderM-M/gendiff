@@ -204,7 +204,7 @@ def render_svg(result: ComparisonResult) -> str:
             'fill="#eaeef2"/>'
             f'<rect x="310" y="{y - 15}" width="{width:.1f}" height="16" '
             f'rx="4" fill="{color}"/>'
-            f'<text x="882" y="{y}" class="value">{value:,}</text>'
+            f'<text x="1040" y="{y}" class="value">{value:,}</text>'
         )
 
     field_rows = []
@@ -219,7 +219,7 @@ def render_svg(result: ComparisonResult) -> str:
             'fill="#eaeef2"/>'
             f'<rect x="310" y="{y - 15}" width="{width:.1f}" height="14" '
             'rx="4" fill="#0969da"/>'
-            f'<text x="882" y="{y}" class="value">{value:,}</text>'
+            f'<text x="1040" y="{y}" class="value">{value:,}</text>'
         )
     field_section = ""
     if field_rows:

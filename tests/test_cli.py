@@ -119,12 +119,15 @@ def test_svg_uses_inferred_and_custom_sample_names(capsys, tmp_path: Path) -> No
 
     status = main([str(first), str(second), "--svg", str(figure)])
     output = capsys.readouterr().out
+    svg = figure.read_text()
 
     assert status == 1
     assert "Only in sample-a: 1" in output
     assert "Only in sample-b: 1" in output
-    assert "sample-a" in figure.read_text()
-    assert "sample-b" in figure.read_text()
+    assert "sample-a" in svg
+    assert "sample-b" in svg
+    assert 'x="1040"' in svg
+    assert 'x="882"' not in svg
 
     status = main(
         [
