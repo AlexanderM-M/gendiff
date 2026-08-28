@@ -327,14 +327,17 @@ def _write_diff_side(
     counts = Counter()
     try:
         with pysam.AlignmentFile(str(source), _mode(source), **kwargs) as handle:
-            with pysam.AlignmentFile(
-                str(only_path), "wb", header=handle.header, threads=max(1, threads)
-            ) as only_output, pysam.AlignmentFile(
-                str(modified_path),
-                "wb",
-                header=handle.header,
-                threads=max(1, threads),
-            ) as modified_output:
+            with (
+                pysam.AlignmentFile(
+                    str(only_path), "wb", header=handle.header, threads=max(1, threads)
+                ) as only_output,
+                pysam.AlignmentFile(
+                    str(modified_path),
+                    "wb",
+                    header=handle.header,
+                    threads=max(1, threads),
+                ) as modified_output,
+            ):
                 ignored = set(ignore_tags)
                 for record in handle.fetch(until_eof=True):
                     values = _record_values(record, ignored)

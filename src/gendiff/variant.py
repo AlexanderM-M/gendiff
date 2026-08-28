@@ -199,11 +199,14 @@ def _write_diff_side(
     counts = Counter()
     try:
         with pysam.VariantFile(str(source), threads=max(1, threads)) as handle:
-            with pysam.VariantFile(
-                str(only_path), "w", header=handle.header
-            ) as only_output, pysam.VariantFile(
-                str(modified_path), "w", header=handle.header
-            ) as modified_output:
+            with (
+                pysam.VariantFile(
+                    str(only_path), "w", header=handle.header
+                ) as only_output,
+                pysam.VariantFile(
+                    str(modified_path), "w", header=handle.header
+                ) as modified_output,
+            ):
                 ignored = set(ignore_info)
                 for record in handle:
                     values = _record_values(record, ignored)

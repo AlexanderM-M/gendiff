@@ -197,9 +197,10 @@ def render_svg(result: ComparisonResult) -> str:
             (f"Only in {result.right_label}", details.right_only, "#8250df"),
         ]
     transition_values = list((details.transitions if details else {}).items())[:8]
-    field_values = transition_values or list(
-        (details.field_changes if details else {}).items()
-    )[:8]
+    field_values = (
+        transition_values
+        or list((details.field_changes if details else {}).items())[:8]
+    )
     height = 460 if not field_values else 494 + len(field_values) * 36
     status = "Equivalent" if result.equivalent else "Different"
     status_color = "#1a7f37" if result.equivalent else "#cf222e"

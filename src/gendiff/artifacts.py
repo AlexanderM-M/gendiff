@@ -34,9 +34,7 @@ def output_workspace(target: Path, force: bool) -> Iterator[Path]:
     if not target.parent.is_dir():
         raise FileNotFoundError(f"output directory not found: {target.parent}")
     if target.exists() and not force:
-        raise FileExistsError(
-            f"output exists: {target}; use --force to replace it"
-        )
+        raise FileExistsError(f"output exists: {target}; use --force to replace it")
     if target.exists() and force:
         manifest = target / "manifest.json"
         try:

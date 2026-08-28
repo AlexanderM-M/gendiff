@@ -139,8 +139,7 @@ class SelectionReader:
 
     def remaining(self) -> int:
         row = self._connection.execute(
-            "SELECT COALESCE(SUM(count), 0) FROM selections "
-            "WHERE side=? AND count>0",
+            "SELECT COALESCE(SUM(count), 0) FROM selections WHERE side=? AND count>0",
             (self._side,),
         ).fetchone()
         return int(row[0])
@@ -263,9 +262,7 @@ def _example(
         if record is None:
             return None
         summary = json.loads(record.summary)
-        return {
-            key: value for key, value in summary.items() if not key.startswith("_")
-        }
+        return {key: value for key, value in summary.items() if not key.startswith("_")}
 
     return {
         "identity": json.loads(identity),
