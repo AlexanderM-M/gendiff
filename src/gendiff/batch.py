@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -282,10 +282,7 @@ def _run_entries(
     temp_dir: Optional[Path],
     diff_workspace: Optional[Path],
 ) -> Tuple[BatchItem, ...]:
-    workers = min(len(entries), max(1, threads // 2))
-    threads_per_comparison = max(1, threads // workers)
-
-    def compare(entry: BatchEntry) -> BatchItem:
+    def output_for(entry: BatchEntry) -> Optional[Path]:
         output = None
         if diff_workspace is not None:
             name = (
@@ -293,22 +290,56 @@ def _run_entries(
                 f"{safe_slug(entry.stage)}"
             )
             output = diff_workspace / name
-        return _compare_entry(
-            entry,
-            policy,
-            threads_per_comparison,
-            ignore_tags,
-            ignore_info,
-            max_examples,
-            progress,
-            temp_dir,
-            output,
-        )
+        return output
 
+    if len(entries) == 1:
+        entry = entries[0]
+        return (
+            _compare_entry(
+                entry,
+                policy,
+                threads,
+                ignore_tags,
+                ignore_info,
+                max_examples,
+                progress,
+                temp_dir,
+                output_for(entry),
+            ),
+        )
+    workers = min(len(entries), threads)
     if workers == 1:
-        return tuple(compare(entry) for entry in entries)
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        return tuple(executor.map(compare, entries))
+        return tuple(
+            _compare_entry(
+                entry,
+                policy,
+                1,
+                ignore_tags,
+                ignore_info,
+                max_examples,
+                progress,
+                temp_dir,
+                output_for(entry),
+            )
+            for entry in entries
+        )
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        futures = [
+            executor.submit(
+                _compare_entry,
+                entry,
+                policy,
+                1,
+                ignore_tags,
+                ignore_info,
+                max_examples,
+                progress,
+                temp_dir,
+                output_for(entry),
+            )
+            for entry in entries
+        ]
+        return tuple(future.result() for future in futures)
 
 
 def _transition_totals(items: Sequence[BatchItem]) -> Dict[str, int]:
