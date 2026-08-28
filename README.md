@@ -37,9 +37,14 @@ pytest
 
 ```bash
 gendiff OLD NEW
+gendiff old.bam new.bam --explain
+gendiff old.bam new.bam --profile mapping --ignore-tag MD
 gendiff old.cram new.cram --reference reference.fa
+gendiff old.vcf.gz new.bcf --normalize --reference reference.fa
+gendiff old.bam new.bam --html comparison.html
+gendiff old.bam new.bam --reference reference.fa --igv-batch differences.igv.batch
+gendiff old.bam new.bam --threads 8 --progress
 gendiff old.vcf.gz new.bcf --json
-gendiff old.bam new.bam --threads 8
 ```
 
 Exit status is `0` when inputs are semantically equivalent, `1` when they differ,
@@ -48,13 +53,22 @@ workflow integration.
 
 GenDiff compares all logical record fields and the structural parts of each
 header. Record ordering, file encoding, and non-structural header metadata do not
-affect equivalence. It reports which field groups differ without loading complete
-files into memory. Two worker threads are used by default; increase `--threads`
-when comparing large files on a machine or allocated cluster job with more cores.
+affect equivalence. The `strict`, `core`, `mapping`, `calls`, and `genotypes`
+profiles provide progressively focused comparisons for their supported formats.
 
-GenDiff does not currently normalize alternative variant representations. Run
-variant normalization before comparing files when equivalent variants may be
-encoded differently. It is not a substitute for assay validation.
+The default fingerprint pass uses bounded memory. `--explain` performs disk-backed
+record matching to report identical, modified, added, and removed records; use
+`--temp-dir` to select scratch storage. Indexed alignment files can be divided by
+contig when more than two threads are requested. Other inputs still scan both
+files concurrently.
+
+Reference-aware VCF normalization follows bcftools semantics and requires an
+indexed FASTA. HTML reports are self-contained. IGV output is a batch file that
+loads both inputs and visits example changed loci.
+
+Some Linux distributions provide an unrelated `/usr/bin/gendiff`; install GenDiff
+in a virtual environment or invoke it as `python -m gendiff`. GenDiff is not a
+substitute for assay validation.
 
 ## License
 

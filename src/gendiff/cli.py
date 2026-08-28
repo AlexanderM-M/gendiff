@@ -2,19 +2,28 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import List, Optional
 
 from gendiff import __version__
 from gendiff.compare import GenDiffError, compare_files
 from gendiff.model import ComparisonResult
+from gendiff.profiles import ALL_PROFILES
+from gendiff.report import render_html, render_igv_batch, write_text
 
 
 def _positive_int(value: str) -> int:
     number = int(value)
     if number < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
+def _nonnegative_int(value: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be at least 0")
     return number
 
 
@@ -26,7 +35,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("left", type=Path, help="first BAM, CRAM, VCF, or BCF")
     parser.add_argument("right", type=Path, help="second file")
     parser.add_argument(
-        "--reference", type=Path, help="reference FASTA used to decode CRAM"
+        "--reference", type=Path, help="reference FASTA for CRAM, normalization, or IGV"
     )
     parser.add_argument(
         "--threads",
@@ -34,6 +43,51 @@ def _parser() -> argparse.ArgumentParser:
         default=2,
         help="total worker threads (default: 2)",
     )
+    parser.add_argument(
+        "--profile",
+        choices=ALL_PROFILES,
+        default="strict",
+        help="comparison policy (default: strict)",
+    )
+    parser.add_argument(
+        "--ignore-tag",
+        action="append",
+        default=[],
+        metavar="TAG",
+        help="ignore a BAM tag; repeat as needed",
+    )
+    parser.add_argument(
+        "--ignore-info",
+        action="append",
+        default=[],
+        metavar="FIELD",
+        help="ignore a VCF INFO field; repeat as needed",
+    )
+    parser.add_argument(
+        "--normalize",
+        action="store_true",
+        help="normalize VCF/BCF alleles using --reference",
+    )
+    parser.add_argument(
+        "--explain", action="store_true", help="match records and explain differences"
+    )
+    parser.add_argument(
+        "--max-examples",
+        type=_nonnegative_int,
+        default=10,
+        help="maximum detailed examples (default: 10)",
+    )
+    parser.add_argument(
+        "--progress", action="store_true", help="report progress to standard error"
+    )
+    parser.add_argument(
+        "--temp-dir",
+        type=Path,
+        help="temporary storage for detailed record matching",
+    )
+    parser.add_argument("--html", type=Path, help="write a self-contained HTML report")
+    parser.add_argument("--igv-batch", type=Path, help="write an IGV batch file")
+    parser.add_argument("--force", action="store_true", help="replace output reports")
     parser.add_argument("--json", action="store_true", help="write JSON output")
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -49,6 +103,9 @@ def _render(result: ComparisonResult) -> str:
     lines = [
         f"Equivalent: {'yes' if result.equivalent else 'no'}",
         f"Type: {result.kind}",
+        f"Relationship: {result.relationship}",
+        f"Identity overlap: {result.identity_overlap:.1%}",
+        f"Profile: {result.profile}",
         f"Records: {result.left_records} / {result.right_records}",
         f"Logical records: {_status(result.content_equal)}",
         f"Structural header: {_status(result.structure_equal)}",
@@ -57,13 +114,71 @@ def _render(result: ComparisonResult) -> str:
     if result.changed_fields:
         fields = ", ".join(field.replace("_", " ") for field in result.changed_fields)
         lines.append(f"Changed fields: {fields}")
+    if result.details is not None:
+        details = result.details
+        lines.extend(
+            [
+                "Record differences:",
+                f"  Identical: {details.identical:,}",
+                f"  Modified: {details.modified:,}",
+                f"  Only in left: {details.left_only:,}",
+                f"  Only in right: {details.right_only:,}",
+            ]
+        )
+        if details.field_changes:
+            changes = ", ".join(
+                f"{name.replace('_', ' ')}={count:,}"
+                for name, count in details.field_changes.items()
+            )
+            lines.append(f"Field change counts: {changes}")
+        if details.top_regions:
+            regions = ", ".join(
+                f"{item['region']} ({item['changes']:,})"
+                for item in details.top_regions[:5]
+            )
+            lines.append(f"Top regions: {regions}")
     return "\n".join(lines)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        result = compare_files(args.left, args.right, args.reference, args.threads)
+        for output in (args.html, args.igv_batch):
+            if output and output.exists() and not args.force:
+                raise FileExistsError(
+                    f"output exists: {output}; use --force to replace it"
+                )
+        if args.html and args.igv_batch and args.html == args.igv_batch:
+            raise ValueError("--html and --igv-batch must use different paths")
+        if args.igv_batch and args.reference is None:
+            raise ValueError("--igv-batch requires --reference")
+        explain = args.explain or args.html is not None or args.igv_batch is not None
+        result = compare_files(
+            args.left,
+            args.right,
+            args.reference,
+            args.threads,
+            profile=args.profile,
+            ignore_tags=args.ignore_tag,
+            ignore_info=args.ignore_info,
+            normalize_variants=args.normalize,
+            explain=explain,
+            max_examples=args.max_examples,
+            progress=args.progress,
+            temp_dir=args.temp_dir,
+        )
+        html_report = render_html(result) if args.html else None
+        igv_report = (
+            render_igv_batch(result, args.reference)
+            if args.igv_batch and args.reference is not None
+            else None
+        )
+        if args.html:
+            write_text(args.html, html_report or "", args.force)
+            print(f"Wrote {args.html}", file=sys.stderr)
+        if args.igv_batch:
+            write_text(args.igv_batch, igv_report or "", args.force)
+            print(f"Wrote {args.igv_batch}", file=sys.stderr)
     except (GenDiffError, OSError, ValueError) as error:
         print(f"gendiff: error: {error}", file=sys.stderr)
         return 2

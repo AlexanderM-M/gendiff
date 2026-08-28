@@ -21,3 +21,5 @@ jobs:
           cache: pip
       - run: python -m pip install -e '.[test]'
       - run: pytest
+      - run: ruff check src tests
+      - run: ruff format --check src tests
