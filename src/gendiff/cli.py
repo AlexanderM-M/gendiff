@@ -90,7 +90,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--html", type=Path, help="write a self-contained HTML report")
     parser.add_argument("--svg", type=Path, help="write a standalone SVG summary")
     parser.add_argument("--igv-batch", type=Path, help="write an IGV batch file")
-    parser.add_argument("--force", action="store_true", help="replace output reports")
+    parser.add_argument(
+        "--write-diff",
+        type=Path,
+        metavar="DIR",
+        help="write only-in and modified records as BAM or VCF files",
+    )
+    parser.add_argument("--force", action="store_true", help="replace outputs")
     parser.add_argument("--json", action="store_true", help="write JSON output")
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -136,12 +142,20 @@ def _render(result: ComparisonResult) -> str:
                 for name, count in details.field_changes.items()
             )
             lines.append(f"Field change counts: {changes}")
+        if details.transitions:
+            transitions = ", ".join(
+                f"{name}={count:,}"
+                for name, count in list(details.transitions.items())[:10]
+            )
+            lines.append(f"Top transitions: {transitions}")
         if details.top_regions:
             regions = ", ".join(
                 f"{item['region']} ({item['changes']:,})"
                 for item in details.top_regions[:5]
             )
             lines.append(f"Top regions: {regions}")
+    if result.artifacts:
+        lines.append(f"Diff files: {Path(result.artifacts['manifest']).parent}")
     return "\n".join(lines)
 
 
@@ -156,10 +170,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
         if len(set(outputs)) != len(outputs):
             raise ValueError("report outputs must use different paths")
+        if args.write_diff and args.write_diff.absolute() in {
+            output.absolute() for output in outputs
+        }:
+            raise ValueError(
+                "diff directory and report outputs must use different paths"
+            )
         if args.igv_batch and args.reference is None:
             raise ValueError("--igv-batch requires --reference")
         explain = any(
-            (args.explain, args.html is not None, args.svg is not None, args.igv_batch)
+            (
+                args.explain,
+                args.html is not None,
+                args.svg is not None,
+                args.igv_batch,
+                args.write_diff is not None,
+            )
         )
         result = compare_files(
             args.sample_a,
@@ -176,6 +202,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             temp_dir=args.temp_dir,
             left_label=args.name_a,
             right_label=args.name_b,
+            diff_dir=args.write_diff,
+            force=args.force,
         )
         html_report = render_html(result) if args.html else None
         svg_report = render_svg(result) if args.svg else None
@@ -193,6 +221,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.igv_batch:
             write_text(args.igv_batch, igv_report or "", args.force)
             print(f"Wrote {args.igv_batch}", file=sys.stderr)
+        if args.write_diff:
+            print(f"Wrote {args.write_diff}", file=sys.stderr)
     except (GenDiffError, OSError, ValueError) as error:
         print(f"gendiff: error: {error}", file=sys.stderr)
         return 2

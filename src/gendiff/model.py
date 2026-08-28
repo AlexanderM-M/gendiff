@@ -12,6 +12,7 @@ class DifferenceDetails:
     left_only: int
     right_only: int
     field_changes: Dict[str, int]
+    transitions: Dict[str, int] = field(default_factory=dict)
     top_regions: List[Dict[str, Any]] = field(default_factory=list)
     sample_changes: Dict[str, int] = field(default_factory=dict)
     examples: List[Dict[str, Any]] = field(default_factory=list)
@@ -52,6 +53,7 @@ class DifferenceDetails:
                 },
             },
             "field_changes": self.field_changes,
+            "transitions": self.transitions,
             "top_regions": self.top_regions,
             "sample_changes": self.sample_changes,
             "examples": examples,
@@ -75,6 +77,7 @@ class ComparisonResult:
     identity_overlap: float = 0.0
     profile: str = "strict"
     details: Optional[DifferenceDetails] = None
+    artifacts: Dict[str, str] = field(default_factory=dict)
 
     @property
     def equivalent(self) -> bool:
@@ -106,4 +109,6 @@ class ComparisonResult:
         }
         if self.details is not None:
             result["details"] = self.details.to_dict(self.left_label, self.right_label)
+        if self.artifacts:
+            result["artifacts"] = self.artifacts
         return result

@@ -54,6 +54,7 @@ gendiff old.cram new.cram --reference reference.fa
 gendiff old.vcf.gz new.bcf --normalize --reference reference.fa
 gendiff old.bam new.bam --html comparison.html
 gendiff old.bam new.bam --svg comparison.svg
+gendiff old.bam new.bam --write-diff diff-records
 gendiff old.bam new.bam --reference reference.fa --igv-batch differences.igv.batch
 gendiff old.bam new.bam --threads 8 --progress
 gendiff old.vcf.gz new.bcf --json
@@ -71,10 +72,15 @@ Input names are inferred from filenames and can be overridden with `--name-a` an
 `--name-b`.
 
 The default fingerprint pass uses bounded memory. `--explain` performs disk-backed
-record matching to report identical, modified, added, and removed records; use
-`--temp-dir` to select scratch storage. Indexed alignment files can be divided by
-contig when more than two threads are requested. Other inputs still scan both
-files concurrently.
+record matching and reports both changed fields and transitions such as MAPQ,
+mapping status, flags, filters, and genotypes. Use `--temp-dir` to select scratch
+storage. Indexed alignment files can be divided by contig when more than two
+threads are requested. Other inputs still scan both files concurrently.
+
+`--write-diff DIR` writes four ordinary BAM or VCF files: records found only in
+each input and the before/after versions of modified records. A small manifest
+records the labels, comparison profile, filenames, and record counts. These files
+can be passed directly to samtools, bcftools, IGV, or downstream workflows.
 
 Reference-aware VCF normalization follows bcftools semantics and requires an
 indexed FASTA. HTML reports are self-contained, while SVG summaries can be used

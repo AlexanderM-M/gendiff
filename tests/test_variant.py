@@ -67,6 +67,27 @@ def test_variant_explain_reports_sample_changes(tmp_path: Path) -> None:
     assert result.details is not None
     assert result.details.modified == 1
     assert result.details.sample_changes == {"sample": 1}
+    assert result.details.transitions == {"genotype sample: 0/1 → 1/1": 1}
+
+
+def test_writes_record_level_vcf_diffs(tmp_path: Path) -> None:
+    left = tmp_path / "left.vcf"
+    right = tmp_path / "right.vcf"
+    output = tmp_path / "diff"
+    _write_vcf(left, [10], genotype=(0, 1))
+    _write_vcf(right, [10], genotype=(1, 1))
+
+    result = compare_files(left, right, diff_dir=output)
+
+    assert result.details is not None
+    assert result.details.modified == 1
+    assert list(pysam.VariantFile(result.artifacts["only_in_first"])) == []
+    assert list(pysam.VariantFile(result.artifacts["only_in_second"])) == []
+    with pysam.VariantFile(result.artifacts["modified_first"]) as handle:
+        assert [record.pos for record in handle] == [10]
+    with pysam.VariantFile(result.artifacts["modified_second"]) as handle:
+        assert [record.pos for record in handle] == [10]
+    assert (output / "manifest.json").is_file()
 
 
 def test_calls_profile_ignores_quality_and_info(tmp_path: Path) -> None:
@@ -75,7 +96,13 @@ def test_calls_profile_ignores_quality_and_info(tmp_path: Path) -> None:
     _write_vcf(left, [10], quality=60, depth=20)
     _write_vcf(right, [10], quality=10, depth=5)
 
-    assert not compare_files(left, right).equivalent
+    strict = compare_files(left, right, explain=True)
+    assert not strict.equivalent
+    assert strict.details is not None
+    assert strict.details.transitions == {
+        "QUAL: 60.0 → 10.0": 1,
+        "INFO value changed: DP": 1,
+    }
     assert compare_files(left, right, profile="calls").equivalent
 
     same_quality = tmp_path / "same-quality.vcf"

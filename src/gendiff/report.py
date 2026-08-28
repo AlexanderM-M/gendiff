@@ -65,6 +65,18 @@ def render_html(result: ComparisonResult) -> str:
             "<section><h2>Changed fields</h2>"
             f"{_bar_rows(details.field_changes)}</section>"
         )
+        if details.transitions:
+            detail_sections.append(
+                "<section><h2>Change transitions</h2>"
+                + _table(
+                    ("Transition", "Records"),
+                    (
+                        (transition, f"{count:,}")
+                        for transition, count in details.transitions.items()
+                    ),
+                )
+                + "</section>"
+            )
         if details.top_regions:
             detail_sections.append(
                 "<section><h2>Most affected regions</h2>"
@@ -184,7 +196,10 @@ def render_svg(result: ComparisonResult) -> str:
             (f"Only in {result.left_label}", details.left_only, "#0969da"),
             (f"Only in {result.right_label}", details.right_only, "#8250df"),
         ]
-    field_values = list((details.field_changes if details else {}).items())[:8]
+    transition_values = list((details.transitions if details else {}).items())[:8]
+    field_values = transition_values or list(
+        (details.field_changes if details else {}).items()
+    )[:8]
     height = 460 if not field_values else 494 + len(field_values) * 36
     status = "Equivalent" if result.equivalent else "Different"
     status_color = "#1a7f37" if result.equivalent else "#cf222e"
@@ -221,8 +236,9 @@ def render_svg(result: ComparisonResult) -> str:
         )
     field_section = ""
     if field_rows:
+        section_title = "Top transitions" if transition_values else "Changed fields"
         field_section = (
-            '<text x="40" y="447" class="section">Changed fields</text>'
+            f'<text x="40" y="447" class="section">{section_title}</text>'
             + "".join(field_rows)
         )
     title_text = escape(

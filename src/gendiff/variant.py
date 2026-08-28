@@ -1,20 +1,28 @@
 from __future__ import annotations
 
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Dict, Optional, Sequence, Set
+from typing import Any, Dict, Optional, Sequence, Set, Tuple
 
 import pysam
 
-from gendiff.details import DetailWriter, analyze_details, relationship_label
+from gendiff.artifacts import output_workspace, sample_slugs, write_manifest
+from gendiff.details import (
+    DetailWriter,
+    SelectionReader,
+    analyze_details,
+    relationship_label,
+)
 from gendiff.fingerprint import (
     Fingerprint,
     FingerprintBuilder,
     Sketch,
     SketchBuilder,
     digest,
+    digest_native,
     digest_parts,
     sketch_containment,
 )
@@ -76,7 +84,9 @@ def _identity(record: pysam.VariantRecord) -> Any:
     return record.contig, record.pos, record.alleles
 
 
-def _record_summary(record: pysam.VariantRecord) -> Dict[str, Any]:
+def _record_summary(
+    record: pysam.VariantRecord, values: Dict[str, Any]
+) -> Dict[str, Any]:
     return {
         "contig": record.contig,
         "position": record.pos,
@@ -84,6 +94,7 @@ def _record_summary(record: pysam.VariantRecord) -> Dict[str, Any]:
         "alleles": record.alleles,
         "quality": record.qual,
         "filters": sorted(record.filter.keys()),
+        "_info": values["info"],
         "genotypes": {
             sample: {
                 "GT": record.samples[sample].get("GT"),
@@ -92,6 +103,13 @@ def _record_summary(record: pysam.VariantRecord) -> Dict[str, Any]:
             for sample in sorted(record.samples)
         },
     }
+
+
+def _record_digests(
+    values: Dict[str, Any], fields: Sequence[str]
+) -> Tuple[list[int], int]:
+    field_digests = [digest_native(values[name]) for name in fields]
+    return field_digests, digest_parts(field_digests)
 
 
 def _scan(
@@ -116,20 +134,17 @@ def _scan(
             for record in handle:
                 identity = _identity(record)
                 values = _record_values(record, ignored)
-                field_digests = []
-                for name in fields:
-                    field_digest = digest(values[name])
+                field_digests, record_digest = _record_digests(values, fields)
+                for name, field_digest in zip(fields, field_digests):
                     builders[name].add_digest(field_digest)
-                    field_digests.append(field_digest)
-                record_digest = digest_parts(field_digests)
                 builders["record"].add_digest(record_digest)
-                sketch.add(identity)
+                sketch.add_digest(digest_native(identity))
                 if writer:
                     writer.add(
                         identity,
                         record_digest,
                         field_digests,
-                        _record_summary(record),
+                        _record_summary(record, values),
                     )
                 count += 1
                 reporter.update(count)
@@ -170,6 +185,118 @@ def _scan_pair(
         return left_future.result(), right_future.result()
 
 
+def _write_diff_side(
+    source: Path,
+    threads: int,
+    fields: Sequence[str],
+    ignore_info: Sequence[str],
+    selection_path: Path,
+    side: int,
+    only_path: Path,
+    modified_path: Path,
+) -> Counter:
+    reader = SelectionReader(selection_path, side)
+    counts = Counter()
+    try:
+        with pysam.VariantFile(str(source), threads=max(1, threads)) as handle:
+            with pysam.VariantFile(
+                str(only_path), "w", header=handle.header
+            ) as only_output, pysam.VariantFile(
+                str(modified_path), "w", header=handle.header
+            ) as modified_output:
+                ignored = set(ignore_info)
+                for record in handle:
+                    values = _record_values(record, ignored)
+                    _, record_digest = _record_digests(values, fields)
+                    status = reader.take(_identity(record), record_digest)
+                    if status == "only":
+                        only_output.write(record)
+                        counts["only"] += 1
+                    elif status == "modified":
+                        modified_output.write(record)
+                        counts["modified"] += 1
+        remaining = reader.remaining()
+        if remaining:
+            raise ValueError(
+                f"could not recover {remaining:,} selected records from {source}"
+            )
+    finally:
+        reader.close()
+    return counts
+
+
+def _write_diff_outputs(
+    left: Path,
+    right: Path,
+    threads: int,
+    fields: Sequence[str],
+    profile: str,
+    ignore_info: Sequence[str],
+    selection_path: Path,
+    target: Path,
+    force: bool,
+    left_label: str,
+    right_label: str,
+    normalized: bool,
+) -> Dict[str, str]:
+    left_slug, right_slug = sample_slugs(left_label, right_label)
+    names = {
+        "only_in_first": f"only-in-{left_slug}.vcf",
+        "only_in_second": f"only-in-{right_slug}.vcf",
+        "modified_first": f"modified-{left_slug}.vcf",
+        "modified_second": f"modified-{right_slug}.vcf",
+    }
+    with output_workspace(target, force) as workspace:
+        per_input_threads = max(1, threads // 2)
+        left_counts = _write_diff_side(
+            left,
+            per_input_threads,
+            fields,
+            ignore_info,
+            selection_path,
+            0,
+            workspace / names["only_in_first"],
+            workspace / names["modified_first"],
+        )
+        right_counts = _write_diff_side(
+            right,
+            per_input_threads,
+            fields,
+            ignore_info,
+            selection_path,
+            1,
+            workspace / names["only_in_second"],
+            workspace / names["modified_second"],
+        )
+        write_manifest(
+            workspace / "manifest.json",
+            {
+                "gendiff_diff_format": 1,
+                "format": "VCF",
+                "normalized": normalized,
+                "profile": profile,
+                "compared_fields": fields,
+                "inputs": [
+                    {
+                        "label": left_label,
+                        "only": left_counts["only"],
+                        "modified": left_counts["modified"],
+                    },
+                    {
+                        "label": right_label,
+                        "only": right_counts["only"],
+                        "modified": right_counts["modified"],
+                    },
+                ],
+                "files": names,
+            },
+        )
+    published = target.absolute()
+    return {key: str(published / name) for key, name in names.items()} | {
+        "manifest": str(published / "manifest.json")
+    }
+
+
 def _normalize(path: Path, output: Path, reference: Path) -> None:
     from pysam import bcftools
 
@@ -201,7 +328,10 @@ def compare_variants(
     max_examples: int,
     progress: bool,
     temp_dir: Optional[Path],
+    diff_dir: Optional[Path],
+    force: bool,
 ) -> ComparisonResult:
+    artifacts: Dict[str, str] = {}
     with TemporaryDirectory(prefix="gendiff-", dir=temp_dir) as work:
         workspace = Path(work)
         scan_left, scan_right = left, right
@@ -235,11 +365,33 @@ def compare_variants(
             left_scan.fingerprints["record"] == right_scan.fingerprints["record"]
         )
         overlap = sketch_containment(left_scan.sketch, right_scan.sketch)
+        selection_path = workspace / "selections.sqlite" if diff_dir else None
         details = (
-            analyze_details(left_details, right_details, fields, max_examples)
+            analyze_details(
+                left_details,
+                right_details,
+                fields,
+                max_examples,
+                selection_path,
+            )
             if explain and left_details and right_details
             else None
         )
+        if diff_dir and selection_path:
+            artifacts = _write_diff_outputs(
+                scan_left,
+                scan_right,
+                threads,
+                fields,
+                profile,
+                ignore_info,
+                selection_path,
+                diff_dir,
+                force,
+                left_label,
+                right_label,
+                normalize_variants,
+            )
     return ComparisonResult(
         kind="variant",
         left=left,
@@ -258,4 +410,5 @@ def compare_variants(
         identity_overlap=overlap,
         profile=profile,
         details=details,
+        artifacts=artifacts,
     )

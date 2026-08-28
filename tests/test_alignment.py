@@ -3,6 +3,7 @@ from pathlib import Path
 import pysam
 
 from gendiff.compare import compare_files
+from gendiff.report import render_html, render_svg
 
 
 def _write_bam(
@@ -95,6 +96,40 @@ def test_explain_matches_modified_records(tmp_path: Path) -> None:
     assert result.details.identical == 1
     assert result.details.modified == 1
     assert result.details.field_changes == {"mapping_quality": 1}
+    assert result.details.transitions == {"MAPQ: 30 → 40": 1}
+    assert "Change transitions" in render_html(result)
+    assert "MAPQ: 30 → 40" in render_svg(result)
+
+
+def test_writes_record_level_bam_diffs(tmp_path: Path) -> None:
+    left = tmp_path / "left.bam"
+    right = tmp_path / "right.bam"
+    output = tmp_path / "diff"
+    _write_bam(left, [(0, 20), (1, 30), (2, 50)], "tool")
+    _write_bam(right, [(0, 20), (1, 40), (3, 60)], "tool")
+
+    result = compare_files(
+        left,
+        right,
+        diff_dir=output,
+        left_label="Before",
+        right_label="After",
+    )
+
+    assert result.details is not None
+    assert result.details.modified == 1
+    assert result.details.left_only == 1
+    assert result.details.right_only == 1
+    expected = {
+        "only_in_first": ["read-2"],
+        "only_in_second": ["read-3"],
+        "modified_first": ["read-1"],
+        "modified_second": ["read-1"],
+    }
+    for key, names in expected.items():
+        with pysam.AlignmentFile(result.artifacts[key], "rb") as handle:
+            assert [record.query_name for record in handle] == names
+    assert (output / "manifest.json").is_file()
 
 
 def test_core_profile_ignores_tags(tmp_path: Path) -> None:
@@ -103,7 +138,10 @@ def test_core_profile_ignores_tags(tmp_path: Path) -> None:
     _write_bam(left, [(0, 20)], "tool", tag_offset=0)
     _write_bam(right, [(0, 20)], "tool", tag_offset=1)
 
-    assert not compare_files(left, right).equivalent
+    strict = compare_files(left, right, explain=True)
+    assert not strict.equivalent
+    assert strict.details is not None
+    assert strict.details.transitions == {"tag value changed: NM": 1}
     assert compare_files(left, right, profile="core").equivalent
     assert compare_files(left, right, ignore_tags=("NM",)).equivalent
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import heapq
-import json
 import math
+import pickle
 from array import array
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -37,11 +37,19 @@ def normalize(value: Any) -> Any:
 
 
 def digest(value: Any) -> int:
-    payload = json.dumps(
-        normalize(value), ensure_ascii=True, separators=(",", ":"), sort_keys=True
-    ).encode("utf-8")
+    """Hash a canonical value; suitable for headers and public helpers."""
+    payload = pickle.dumps(normalize(value), protocol=4)
     return int.from_bytes(
-        hashlib.blake2b(payload, digest_size=32, person=b"gendiff-v1").digest(),
+        hashlib.blake2b(payload, digest_size=32, person=b"gendiff-v2").digest(),
+        "big",
+    )
+
+
+def digest_native(value: Any) -> int:
+    """Hash an internally constructed value without redundant normalization."""
+    payload = pickle.dumps(value, protocol=5)
+    return int.from_bytes(
+        hashlib.blake2b(payload, digest_size=32, person=b"gendiff-v2").digest(),
         "big",
     )
 

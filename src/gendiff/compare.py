@@ -88,6 +88,8 @@ def compare_files(
     temp_dir: Optional[Path] = None,
     left_label: Optional[str] = None,
     right_label: Optional[str] = None,
+    diff_dir: Optional[Path] = None,
+    force: bool = False,
 ) -> ComparisonResult:
     if threads < 1:
         raise GenDiffError("threads must be at least 1")
@@ -100,6 +102,11 @@ def compare_files(
         raise GenDiffError("max examples must be at least 0")
     if temp_dir is not None and not temp_dir.is_dir():
         raise GenDiffError(f"temporary directory not found: {temp_dir}")
+    if diff_dir is not None:
+        explain = True
+        resolved_diff = diff_dir.absolute()
+        if resolved_diff in {left.absolute(), right.absolute()}:
+            raise GenDiffError("diff output directory cannot be an input file")
     labels = _input_labels(left, right, left_label, right_label)
 
     left_kind = _kind(left)
@@ -129,6 +136,8 @@ def compare_files(
             max_examples,
             progress,
             temp_dir,
+            diff_dir,
+            force,
         )
     if ignore_tags:
         raise GenDiffError("--ignore-tag is only valid for BAM/CRAM comparisons")
@@ -155,4 +164,6 @@ def compare_files(
         max_examples,
         progress,
         temp_dir,
+        diff_dir,
+        force,
     )
