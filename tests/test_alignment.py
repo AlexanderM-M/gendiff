@@ -98,8 +98,12 @@ def test_explain_matches_modified_records(tmp_path: Path) -> None:
     assert result.details.modified == 1
     assert result.details.field_changes == {"mapping_quality": 1}
     assert result.details.transitions == {"MAPQ: 30 → 40": 1}
+    assert result.details.distribution_shifts[0]["label"] == "Mapping quality"
+    assert result.details.region_density[0]["difference_fraction"] == 0.25
+    assert len(result.details.findings) == 3
     assert "Change transitions" in render_html(result)
-    assert "MAPQ: 30 → 40" in render_svg(result)
+    assert "Distribution shifts" in render_svg(result)
+    assert "Mapping quality" in render_svg(result)
 
 
 def test_writes_record_level_bam_diffs(tmp_path: Path) -> None:

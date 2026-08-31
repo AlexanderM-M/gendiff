@@ -103,6 +103,10 @@ def test_calls_profile_ignores_quality_and_info(tmp_path: Path) -> None:
         "QUAL: 60.0 → 10.0": 1,
         "INFO value changed: DP": 1,
     }
+    assert {item["label"] for item in strict.details.distribution_shifts} == {
+        "Depth",
+        "Variant quality",
+    }
     assert compare_files(left, right, profile="calls").equivalent
 
     same_quality = tmp_path / "same-quality.vcf"

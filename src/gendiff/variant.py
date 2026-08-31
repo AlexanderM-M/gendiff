@@ -27,6 +27,7 @@ from gendiff.fingerprint import (
     digest_parts,
     sketch_containment,
 )
+from gendiff.metrics import add_variant_metrics
 from gendiff.model import ComparisonResult
 from gendiff.progress import ProgressReporter
 from gendiff.regions import RegionFilter
@@ -41,6 +42,8 @@ class _ScanResult:
     metadata: Dict[str, Any]
     sketch: Sketch
     contig_counts: Dict[str, int]
+    window_counts: Dict[Tuple[str, int], int]
+    metric_counts: Dict[str, Dict[float, int]]
 
 
 def _structural_header(header: pysam.VariantHeader) -> Dict[str, Any]:
@@ -133,6 +136,8 @@ def _scan(
     ignored = set(ignore_info)
     count = 0
     contig_counts = Counter()
+    window_counts = Counter()
+    metric_counts: Dict[str, Counter] = {}
     try:
         with pysam.VariantFile(str(path), threads=threads) as handle:
             structural = _structural_header(handle.header)
@@ -142,6 +147,7 @@ def _scan(
                     record.contig, record.start, record.stop
                 ):
                     continue
+                add_variant_metrics(metric_counts, record, fields, ignore_info)
                 identity = _identity(record)
                 values = _record_values(record, ignored)
                 field_digests, record_digest = _record_digests(values, fields)
@@ -158,6 +164,7 @@ def _scan(
                     )
                 count += 1
                 contig_counts[record.contig] += 1
+                window_counts[(record.contig, record.start // 1_000_000)] += 1
                 reporter.update(count)
     finally:
         if writer:
@@ -165,7 +172,14 @@ def _scan(
         reporter.finish(count)
     fingerprints = {name: builder.finish() for name, builder in builders.items()}
     return _ScanResult(
-        fingerprints, count, structural, metadata, sketch.finish(), dict(contig_counts)
+        fingerprints,
+        count,
+        structural,
+        metadata,
+        sketch.finish(),
+        dict(contig_counts),
+        dict(window_counts),
+        {name: dict(values) for name, values in metric_counts.items()},
     )
 
 
@@ -418,6 +432,10 @@ def compare_variants(
                 left_scan.contig_counts,
                 right_scan.contig_counts,
                 contig_lengths(left_scan.structural, right_scan.structural),
+                left_scan.window_counts,
+                right_scan.window_counts,
+                left_scan.metric_counts,
+                right_scan.metric_counts,
             )
             if explain and left_details and right_details
             else None
@@ -446,6 +464,8 @@ def compare_variants(
                     track_dir,
                     force,
                     contig_lengths(left_scan.structural, right_scan.structural),
+                    left_scan.window_counts,
+                    right_scan.window_counts,
                 )
             )
         if difference_table and table_path:

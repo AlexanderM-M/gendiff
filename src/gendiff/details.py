@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from gendiff.difference_table import DifferenceTableWriter
 from gendiff.fingerprint import normalize
+from gendiff.metrics import MetricCounts, distribution_shifts
 from gendiff.model import DifferenceDetails
 
 _DIGEST_BYTES = 32
@@ -456,6 +458,10 @@ def analyze_details(
     left_contigs: Optional[Dict[str, int]] = None,
     right_contigs: Optional[Dict[str, int]] = None,
     lengths: Optional[Dict[str, int]] = None,
+    left_windows: Optional[Dict[Tuple[str, int], int]] = None,
+    right_windows: Optional[Dict[Tuple[str, int], int]] = None,
+    left_metrics: Optional[MetricCounts] = None,
+    right_metrics: Optional[MetricCounts] = None,
 ) -> DifferenceDetails:
     left_groups = iter(_groups(left_path))
     right_groups = iter(_groups(right_path))
@@ -615,9 +621,26 @@ def analyze_details(
                 "first_records": first,
                 "second_records": second,
                 "difference_fraction": changes / max(1, first + second),
+                "coverage_ratio": math.log2((second + 1) / (first + 1)),
                 "length": (lengths or {}).get(contig, 0),
             }
         )
+    shifts = distribution_shifts(left_metrics or {}, right_metrics or {})
+    findings = _findings(
+        field_changes,
+        modified,
+        left_only,
+        right_only,
+        contig_changes,
+        shifts,
+    )
+    first_windows = left_windows or {}
+    second_windows = right_windows or {}
+    window_keys = (
+        set(regions)
+        | {(contig, window * 1_000_000) for contig, window in first_windows}
+        | {(contig, window * 1_000_000) for contig, window in second_windows}
+    )
 
     return DifferenceDetails(
         identical=identical,
@@ -640,13 +663,96 @@ def analyze_details(
             {
                 "contig": contig,
                 "start": start,
-                "end": start + 1_000_000,
-                "changes": changes,
+                "end": min(
+                    start + 1_000_000,
+                    (lengths or {}).get(contig, start + 1_000_000),
+                ),
+                "changes": regions.get((contig, start), 0),
+                "first_records": first_windows.get((contig, start // 1_000_000), 0),
+                "second_records": second_windows.get((contig, start // 1_000_000), 0),
+                "difference_fraction": regions.get((contig, start), 0)
+                / max(
+                    1,
+                    first_windows.get((contig, start // 1_000_000), 0)
+                    + second_windows.get((contig, start // 1_000_000), 0),
+                ),
+                "coverage_ratio": math.log2(
+                    (second_windows.get((contig, start // 1_000_000), 0) + 1)
+                    / (first_windows.get((contig, start // 1_000_000), 0) + 1)
+                ),
             }
-            for (contig, start), changes in sorted(regions.items())
+            for contig, start in sorted(window_keys)
         ],
         contig_stats=contig_stats,
+        distribution_shifts=shifts,
+        findings=findings,
     )
+
+
+def _findings(
+    fields: Counter,
+    modified: int,
+    left_only: int,
+    right_only: int,
+    contigs: Counter,
+    shifts: Sequence[Dict[str, Any]],
+) -> List[str]:
+    findings = []
+    if fields:
+        field, count = fields.most_common(1)[0]
+        findings.append(
+            f"Primary record change: {field.replace('_', ' ')} "
+            f"({count / max(1, modified):.0%} of modified records)."
+        )
+    elif left_only or right_only:
+        findings.append(
+            f"Record membership changed: {left_only:,} only in the first input and "
+            f"{right_only:,} only in the second."
+        )
+    if shifts:
+        shift = shifts[0]
+        if shift["kind"] == "rate":
+            direction = (
+                "increased"
+                if shift["second_value"] > shift["first_value"]
+                else "decreased"
+            )
+            findings.append(
+                f"{shift['label']} {direction} from {shift['first_value']:.1%} to "
+                f"{shift['second_value']:.1%}."
+            )
+        else:
+            if shift["first_median"] == shift["second_median"]:
+                findings.append(
+                    f"{shift['label']} distribution changed by "
+                    f"{shift['distance']:.0%}; median remained "
+                    f"{shift['first_median']:g}."
+                )
+            else:
+                findings.append(
+                    f"{shift['label']} shifted: median {shift['first_median']:g} → "
+                    f"{shift['second_median']:g}."
+                )
+    if contigs:
+        contig, count = contigs.most_common(1)[0]
+        total = sum(contigs.values())
+        fraction = count / total
+        if fraction >= 0.5:
+            findings.append(
+                f"Differences are concentrated on {contig} "
+                f"({fraction:.0%} of located changes)."
+            )
+        elif fraction <= 0.2:
+            findings.append(
+                "Differences are genome-wide; no contig contributes more than "
+                f"{fraction:.0%}."
+            )
+        else:
+            findings.append(
+                f"Differences span {len(contigs):,} contigs; {contig} contributes "
+                f"the most ({fraction:.0%})."
+            )
+    return findings[:3]
 
 
 def relationship_label(overlap: float, content_equal: bool, empty: bool) -> str:

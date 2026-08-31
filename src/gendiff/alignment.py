@@ -30,6 +30,7 @@ from gendiff.fingerprint import (
     normalize,
     sketch_containment,
 )
+from gendiff.metrics import add_alignment_metrics, merge_metric_counts
 from gendiff.model import ComparisonResult
 from gendiff.progress import ProgressReporter
 from gendiff.regions import RegionFilter
@@ -44,6 +45,8 @@ class _ScanResult:
     metadata: Dict[str, Any]
     sketch: Sketch
     contig_counts: Dict[str, int]
+    window_counts: Dict[Tuple[str, int], int]
+    metric_counts: Dict[str, Dict[float, int]]
 
 
 def _mode(path: Path) -> str:
@@ -148,6 +151,8 @@ def _scan(
     kwargs["threads"] = threads
     count = 0
     contig_counts = Counter()
+    window_counts = Counter()
+    metric_counts: Dict[str, Counter] = {}
     try:
         with pysam.AlignmentFile(str(path), _mode(path), **kwargs) as handle:
             structural = _structural_header(handle.header)
@@ -165,6 +170,7 @@ def _scan(
                         record.reference_name, start, end
                     ):
                         continue
+                    add_alignment_metrics(metric_counts, record, fields)
                     identity = _identity(record)
                     values = _record_values(record, ignored)
                     field_digests, record_digest = _record_digests(values, fields)
@@ -182,6 +188,9 @@ def _scan(
                     count += 1
                     if record.reference_name is not None:
                         contig_counts[record.reference_name] += 1
+                        window_counts[
+                            (record.reference_name, record.reference_start // 1_000_000)
+                        ] += 1
                     reporter.update(count)
     finally:
         if writer:
@@ -189,7 +198,14 @@ def _scan(
         reporter.finish(count)
     fingerprints = {name: builder.finish() for name, builder in builders.items()}
     return _ScanResult(
-        fingerprints, count, structural, metadata, sketch.finish(), dict(contig_counts)
+        fingerprints,
+        count,
+        structural,
+        metadata,
+        sketch.finish(),
+        dict(contig_counts),
+        dict(window_counts),
+        {name: dict(values) for name, values in metric_counts.items()},
     )
 
 
@@ -228,6 +244,8 @@ def _merge_scans(scans: Sequence[_ScanResult], fields: Sequence[str]) -> _ScanRe
         scans[0].metadata,
         merge_sketches(scan.sketch for scan in scans),
         dict(sum((Counter(scan.contig_counts) for scan in scans), Counter())),
+        dict(sum((Counter(scan.window_counts) for scan in scans), Counter())),
+        merge_metric_counts(scan.metric_counts for scan in scans),
     )
 
 
@@ -578,6 +596,10 @@ def compare_alignments(
                 left_scan.contig_counts,
                 right_scan.contig_counts,
                 contig_lengths(left_scan.structural, right_scan.structural),
+                left_scan.window_counts,
+                right_scan.window_counts,
+                left_scan.metric_counts,
+                right_scan.metric_counts,
             )
             if explain and left_details and right_details
             else None
@@ -606,6 +628,8 @@ def compare_alignments(
                     track_dir,
                     force,
                     contig_lengths(left_scan.structural, right_scan.structural),
+                    left_scan.window_counts,
+                    right_scan.window_counts,
                 )
             )
         if difference_table and table_path:

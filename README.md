@@ -94,16 +94,17 @@ each input and the before/after versions of modified records. A small manifest
 records the labels, comparison profile, filenames, and record counts. These files
 can be passed directly to samtools, bcftools, IGV, or downstream workflows.
 
-`--tracks DIR` writes a BED file of affected loci, a bedGraph of difference
-density, and a per-contig TSV. These files work directly with IGV, bedtools, and
-other genome browsers.
+`--tracks DIR` writes affected loci, raw and normalized difference bedGraphs, a
+log2 coverage-ratio bedGraph, and a per-contig TSV. These files work directly
+with IGV, bedtools, and other genome browsers.
 
 Reference-aware VCF normalization follows bcftools semantics and requires an
-indexed FASTA. HTML reports are self-contained and lead with a proportional
-record overview, a genome-wide difference map, and a MAPQ or genotype transition
-matrix when applicable. Detailed tables stay collapsed. SVG summaries can be
-used directly in documents and presentations. IGV output is a batch file that
-loads both inputs and visits example changed loci.
+indexed FASTA. HTML reports are self-contained and lead with three concise
+findings, a proportional record overview, significant distribution shifts, and
+a normalized genome-wide difference and coverage map. A MAPQ or genotype
+transition matrix appears when applicable; detailed tables stay collapsed. SVG
+summaries can be used directly in documents and presentations. IGV output is a
+batch file that loads both inputs and visits example changed loci.
 
 ## Pipeline regression
 

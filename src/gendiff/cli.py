@@ -365,6 +365,9 @@ def _render(result: ComparisonResult) -> str:
                 for item in details.top_regions[:5]
             )
             lines.append(f"Top regions: {regions}")
+        if details.findings:
+            lines.append("What changed:")
+            lines.extend(f"  - {finding}" for finding in details.findings)
     if "manifest" in result.artifacts:
         lines.append(f"Diff files: {Path(result.artifacts['manifest']).parent}")
     if "track_manifest" in result.artifacts:

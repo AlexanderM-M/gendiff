@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from collections import Counter
 from pathlib import Path
@@ -43,10 +44,14 @@ def write_tracks(
     target: Path,
     force: bool,
     lengths: Optional[Mapping[str, int]] = None,
+    first_windows: Optional[Mapping[Tuple[str, int], int]] = None,
+    second_windows: Optional[Mapping[Tuple[str, int], int]] = None,
 ) -> Dict[str, str]:
     names = {
         "bed": "changes.bed",
         "bedgraph": "difference-density.bedgraph",
+        "rate": "difference-rate.bedgraph",
+        "coverage": "coverage-ratio.bedgraph",
         "contigs": "contig-summary.tsv",
     }
     with output_workspace(target, force) as workspace:
@@ -64,6 +69,24 @@ def write_tracks(
                 if lengths and contig in lengths:
                     end = min(end, lengths[contig])
                 graph.write(f"{contig}\t{start}\t{end}\t{count}\n")
+        first = first_windows or {}
+        second = second_windows or {}
+        window_keys = set(windows) | set(first) | set(second)
+        with (
+            (workspace / names["rate"]).open("w", encoding="utf-8") as rates,
+            (workspace / names["coverage"]).open("w", encoding="utf-8") as coverage,
+        ):
+            for contig, window in sorted(window_keys):
+                start = window * _WINDOW
+                end = min(start + _WINDOW, (lengths or {}).get(contig, start + _WINDOW))
+                before = first.get((contig, window), 0)
+                after = second.get((contig, window), 0)
+                rate = min(
+                    1.0, windows.get((contig, window), 0) / max(1, before + after)
+                )
+                ratio = math.log2((after + 1) / (before + 1))
+                rates.write(f"{contig}\t{start}\t{end}\t{rate:.6g}\n")
+                coverage.write(f"{contig}\t{start}\t{end}\t{ratio:.6g}\n")
         with (workspace / names["contigs"]).open("w", encoding="utf-8") as summary:
             summary.write("contig\tchanged_records\n")
             for contig, count in contigs.most_common():
@@ -76,6 +99,8 @@ def write_tracks(
                 "coordinate_systems": {
                     "bed": "zero-based, half-open",
                     "bedgraph": "zero-based, half-open; one-megabase windows",
+                    "rate": "changed records / compared records by window",
+                    "coverage": "log2(second / first) record count by window",
                 },
                 "files": names,
             },

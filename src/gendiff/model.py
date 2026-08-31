@@ -19,6 +19,8 @@ class DifferenceDetails:
     loci: List[str] = field(default_factory=list)
     region_density: List[Dict[str, Any]] = field(default_factory=list)
     contig_stats: List[Dict[str, Any]] = field(default_factory=list)
+    distribution_shifts: List[Dict[str, Any]] = field(default_factory=list)
+    findings: List[str] = field(default_factory=list)
 
     def to_dict(self, left_label: str, right_label: str) -> Dict[str, Any]:
         statuses = {
@@ -59,6 +61,8 @@ class DifferenceDetails:
             "top_regions": self.top_regions,
             "region_density": self.region_density,
             "contig_stats": self.contig_stats,
+            "distribution_shifts": self.distribution_shifts,
+            "findings": self.findings,
             "sample_changes": self.sample_changes,
             "examples": examples,
         }

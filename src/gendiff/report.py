@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from collections import Counter
@@ -79,7 +80,6 @@ def _genome_map(result: ComparisonResult) -> str:
     density = {}
     for item in details.region_density:
         density.setdefault(item["contig"], []).append(item)
-    maximum = max((item["changes"] for item in details.region_density), default=1)
     rows = []
     for stat in details.contig_stats[:12]:
         contig = str(stat["contig"])
@@ -87,21 +87,102 @@ def _genome_map(result: ComparisonResult) -> str:
             stat["length"]
             or max((x["end"] for x in density.get(contig, [])), default=1)
         )
-        cells = "".join(
+        difference_cells = "".join(
             f"<i style='left:{100 * item['start'] / length:.3f}%;"
             f"width:{max(0.35, 100 * (item['end'] - item['start']) / length):.3f}%;"
-            f"opacity:{0.18 + 0.82 * item['changes'] / maximum:.3f}' "
+            f"opacity:{0.12 + 0.88 * math.sqrt(item['difference_fraction']):.3f}' "
             f"title='{escape(contig)}:{item['start'] + 1:,} — "
-            f"{item['changes']:,} changes'></i>"
+            f"{item['difference_fraction']:.1%} different'></i>"
             for item in density.get(contig, [])
+            if item["changes"]
+        )
+        coverage_cells = "".join(
+            f"<i style='left:{100 * item['start'] / length:.3f}%;"
+            f"width:{max(0.35, 100 * (item['end'] - item['start']) / length):.3f}%;"
+            f"opacity:{min(1.0, 0.18 + abs(item['coverage_ratio']) / 3):.3f};"
+            f"background:{'#0969da' if item['coverage_ratio'] > 0 else '#8250df'}' "
+            f"title='{escape(contig)}:{item['start'] + 1:,} — coverage "
+            f"{2 ** item['coverage_ratio']:.2f}× in {escape(result.right_label)}'></i>"
+            for item in density.get(contig, [])
+            if abs(item["coverage_ratio"]) > 0.01
         )
         rows.append(
             f"<div class='genome-row'><strong>{escape(contig)}</strong>"
-            f"<div class='genome-track'>{cells}</div>"
-            f"<span>{stat['changes']:,}</span></div>"
+            "<div class='genome-pair'>"
+            f"<div class='genome-track difference'>{difference_cells}</div>"
+            f"<div class='genome-track coverage'>{coverage_cells}</div></div>"
+            f"<span>{stat['difference_fraction']:.1%}</span></div>"
         )
     return (
-        "<section><h2>Differences across the genome</h2>" + "".join(rows) + "</section>"
+        "<section><h2>Differences across the genome</h2>"
+        "<div class='track-key'><span class='difference-key'>Difference rate</span>"
+        f"<span class='first-key'>More in {escape(result.left_label)}</span>"
+        f"<span class='second-key'>More in {escape(result.right_label)}</span></div>"
+        + "".join(rows)
+        + "</section>"
+    )
+
+
+def _findings(result: ComparisonResult) -> str:
+    details = result.details
+    if details is None or not details.findings:
+        return ""
+    items = "".join(f"<li>{escape(value)}</li>" for value in details.findings)
+    return f"<section class='findings'><h2>What changed</h2><ol>{items}</ol></section>"
+
+
+def _curve(values: List[float]) -> str:
+    cumulative = 0.0
+    points = ["0,82"]
+    denominator = max(1, len(values) - 1)
+    for index, value in enumerate(values):
+        cumulative += value
+        points.append(f"{index * 420 / denominator:.1f},{82 - cumulative * 70:.1f}")
+    return " ".join(points)
+
+
+def _distributions(result: ComparisonResult) -> str:
+    details = result.details
+    if details is None or not details.distribution_shifts:
+        return ""
+    cards = []
+    for shift in details.distribution_shifts[:4]:
+        if shift["kind"] == "rate":
+            plot = (
+                "<div class='rate-plot'>"
+                f"<span>{escape(result.left_label)}</span><i><b style='width:"
+                f"{shift['first_value'] * 100:.2f}%'></b></i>"
+                f"<strong>{shift['first_value']:.1%}</strong>"
+                f"<span>{escape(result.right_label)}</span><i><b class='second' "
+                f"style='width:{shift['second_value'] * 100:.2f}%'></b></i>"
+                f"<strong>{shift['second_value']:.1%}</strong></div>"
+            )
+        else:
+            first = [item["first"] for item in shift["bins"]]
+            second = [item["second"] for item in shift["bins"]]
+            plot = (
+                "<svg class='curve' viewBox='0 0 420 94' role='img'>"
+                "<path d='M0 82H420' class='axis'/>"
+                f"<polyline points='{_curve(first)}' class='first-line'/>"
+                f"<polyline points='{_curve(second)}' class='second-line'/></svg>"
+                f"<div class='medians'>Median: {shift['first_median']:g} → "
+                f"{shift['second_median']:g}</div>"
+            )
+        cards.append(
+            f"<article><h3>{escape(shift['label'])}</h3>"
+            f"<span class='delta'>{shift['distance']:.0%} shift</span>{plot}</article>"
+        )
+    key = (
+        "<div class='line-key'><span class='first-line-key'>"
+        f"{escape(result.left_label)}</span><span class='second-line-key'>"
+        f"{escape(result.right_label)}</span></div>"
+    )
+    return (
+        "<section><h2>Distribution shifts</h2>"
+        + key
+        + "<div class='shifts'>"
+        + "".join(cards)
+        + "</div></section>"
     )
 
 
@@ -150,14 +231,16 @@ def render_html(result: ComparisonResult) -> str:
     status_class = "ok" if result.equivalent else "different"
     detail_sections: List[str] = []
     if details is not None:
+        detail_sections.append(_findings(result))
         detail_sections.append(
             "<section><h2>Record comparison</h2>" + _composition(result) + "</section>"
         )
+        detail_sections.append(_distributions(result))
         detail_sections.append(_genome_map(result))
         detail_sections.append(_transition_matrix(result))
         detail_sections.append(
-            "<section><h2>Changed fields</h2>"
-            f"{_bar_rows(details.field_changes)}</section>"
+            "<details><summary>Changed fields</summary><section>"
+            f"{_bar_rows(details.field_changes)}</section></details>"
         )
         if details.transitions:
             detail_sections.append(
@@ -185,7 +268,7 @@ def render_html(result: ComparisonResult) -> str:
             )
         if details.sample_changes:
             detail_sections.append(
-                "<section><h2>Genotype changes by sample</h2>"
+                "<details><summary>Genotype changes by sample</summary><section>"
                 + _table(
                     ("Sample", "Changes"),
                     (
@@ -193,7 +276,7 @@ def render_html(result: ComparisonResult) -> str:
                         for sample, count in details.sample_changes.items()
                     ),
                 )
-                + "</section>"
+                + "</section></details>"
             )
         if details.examples:
             detail_sections.append(
@@ -253,9 +336,30 @@ height:10px;border-radius:2px;margin-right:6px}}
 .legend strong{{color:var(--text);margin-left:3px}}
 .genome-row{{display:grid;grid-template-columns:110px 1fr 70px;gap:12px;
 align-items:center;margin:8px 0}}.genome-row span{{text-align:right}}
+.genome-pair{{display:grid;gap:3px}}
 .genome-track{{height:14px;background:#eaeef2;border-radius:4px;
 position:relative;overflow:hidden}}.genome-track i{{position:absolute;height:100%;
-background:var(--bad)}}details{{margin-top:16px}}
+background:var(--bad)}}.genome-track.coverage{{height:7px}}
+.track-key,.line-key{{display:flex;flex-wrap:wrap;gap:16px;color:var(--muted);
+font-size:12px;margin-bottom:12px}}.track-key span:before,
+.line-key span:before{{content:"";
+display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}}
+.difference-key:before{{background:var(--bad)}}.first-key:before,
+.second-line-key:before{{background:#8250df}}.second-key:before,
+.first-line-key:before{{background:#0969da}}
+.findings ol{{margin:0;padding-left:22px;display:grid;gap:8px}}
+.shifts{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}
+.shifts article{{position:relative;border:1px solid var(--line);border-radius:6px;
+padding:14px}}.shifts h3{{font-size:14px;margin:0 70px 8px 0}}
+.delta{{position:absolute;right:14px;top:14px;color:var(--muted)}}
+.curve{{display:block;width:100%;height:94px}}.curve polyline{{fill:none;
+stroke-width:3}}.axis{{stroke:var(--line)}}.first-line{{stroke:#0969da}}
+.second-line{{stroke:#8250df}}.medians{{color:var(--muted);font-size:12px}}
+.rate-plot{{display:grid;grid-template-columns:90px 1fr 55px;gap:6px;
+align-items:center}}.rate-plot i{{height:9px;background:#eaeef2;border-radius:4px;
+overflow:hidden}}.rate-plot b{{display:block;height:100%;background:#0969da}}
+.rate-plot b.second{{background:#8250df}}.rate-plot strong{{text-align:right}}
+details{{margin-top:16px}}
 summary{{cursor:pointer;font-weight:700;font-size:16px}}
 .heat{{text-align:center;background:rgba(207,34,46,var(--heat))}}
 .matrix th{{text-align:center}}
@@ -268,7 +372,8 @@ th,td{{border-bottom:1px solid var(--line);padding:8px;text-align:left;
 vertical-align:top;max-width:360px;overflow-wrap:anywhere}}
 th{{background:#f6f8fa}}
 @media(max-width:700px){{.cards{{grid-template-columns:1fr 1fr}}
-.summary{{grid-template-columns:1fr}}}}
+.summary{{grid-template-columns:1fr}}.shifts{{grid-template-columns:1fr}}
+.genome-row{{grid-template-columns:70px 1fr 55px}}}}
 </style>
 </head>
 <body><main>
@@ -304,16 +409,28 @@ def render_svg(result: ComparisonResult) -> str:
             (f"Only in {result.left_label}", details.left_only, "#0969da"),
             (f"Only in {result.right_label}", details.right_only, "#8250df"),
         ]
-    transition_values = list((details.transitions if details else {}).items())[:8]
-    field_values = (
-        transition_values
-        or list((details.field_changes if details else {}).items())[:8]
-    )
-    height = 420 if not field_values else 444 + len(field_values) * 36
+    shift_values = [
+        (item["label"], item["distance"] * 100, f"{item['distance']:.0%}")
+        for item in (details.distribution_shifts if details else [])[:4]
+    ]
+    transition_values = [
+        (name, value, f"{value:,}")
+        for name, value in list((details.transitions if details else {}).items())[:6]
+    ]
+    changed_values = [
+        (name, value, f"{value:,}")
+        for name, value in list((details.field_changes if details else {}).items())[:6]
+    ]
+    field_values = shift_values or transition_values or changed_values
+    findings = list((details.findings if details else [])[:3])
+    finding_height = 28 + len(findings) * 24 if findings else 0
+    field_title_y = 402 + finding_height
+    field_start = field_title_y + 28
+    height = max(420, field_start + len(field_values) * 36 + 32)
     status = "Equivalent" if result.equivalent else "Different"
     status_color = "#1a7f37" if result.equivalent else "#cf222e"
     overlap_width = 920 * max(0.0, min(1.0, result.identity_overlap))
-    field_maximum = max((value for _, value in field_values), default=1) or 1
+    field_maximum = max((value for _, value, _ in field_values), default=1) or 1
 
     record_rows = []
     total_records = sum(value for _, value, _ in record_values) or 1
@@ -335,8 +452,7 @@ def render_svg(result: ComparisonResult) -> str:
         )
 
     field_rows = []
-    field_start = 430
-    for index, (name, value) in enumerate(field_values):
+    for index, (name, value, display) in enumerate(field_values):
         y = field_start + index * 36
         width = 550 * value / field_maximum
         field_rows.append(
@@ -346,15 +462,31 @@ def render_svg(result: ComparisonResult) -> str:
             'fill="#eaeef2"/>'
             f'<rect x="310" y="{y - 15}" width="{width:.1f}" height="14" '
             'rx="4" fill="#0969da"/>'
-            f'<text x="1040" y="{y}" class="value">{value:,}</text>'
+            f'<text x="1040" y="{y}" class="value">{display}</text>'
         )
     field_section = ""
     if field_rows:
-        section_title = "Top transitions" if transition_values else "Changed fields"
-        field_section = (
-            f'<text x="40" y="402" class="section">{section_title}</text>'
-            + "".join(field_rows)
+        section_title = (
+            "Distribution shifts"
+            if shift_values
+            else "Top transitions"
+            if transition_values
+            else "Changed fields"
         )
+        field_section = (
+            f'<text x="40" y="{field_title_y}" class="section">'
+            f"{section_title}</text>" + "".join(field_rows)
+        )
+    finding_section = ""
+    if findings:
+        finding_section = '<text x="40" y="402" class="section">What changed</text>'
+        for index, finding in enumerate(findings):
+            y = 428 + index * 24
+            finding_section += (
+                f'<circle cx="55" cy="{y - 5}" r="3" fill="#59636e"/>'
+                f'<text x="68" y="{y}" class="label">'
+                f"{escape(_short(finding, 120))}</text>"
+            )
     title_text = escape(
         f"GenDiff comparison: {result.left_label} and {result.right_label}"
     )
@@ -402,6 +534,7 @@ text{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#1
 <text x="48" y="270" class="section">Record comparison</text>
 <rect x="48" y="286" width="920" height="24" rx="6" fill="#eaeef2"/>
 {record_section}
+{finding_section}
 {field_section}
 </svg>
 '''

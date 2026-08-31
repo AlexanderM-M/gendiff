@@ -166,4 +166,6 @@ def test_track_outputs_are_standard_text_files(tmp_path: Path) -> None:
     assert (tracks / "difference-density.bedgraph").read_text() == (
         "chr1\t0\t1000\t1\n"
     )
+    assert (tracks / "difference-rate.bedgraph").is_file()
+    assert (tracks / "coverage-ratio.bedgraph").is_file()
     assert "chr1\t1" in (tracks / "contig-summary.tsv").read_text()
