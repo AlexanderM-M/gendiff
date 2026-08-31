@@ -6,6 +6,7 @@ import csv
 import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -13,6 +14,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from gendiff.artifacts import output_workspace, safe_slug, write_manifest
 from gendiff.compare import GenDiffError, compare_files
 from gendiff.model import ComparisonResult
+from gendiff.policy import (
+    BatchPolicy,
+    PolicyDocument,
+    evaluate_policy,
+    resolve_policy,
+)
 
 _REQUIRED_COLUMNS = {"sample", "stage", "before", "after"}
 _OPTIONAL_COLUMNS = {"profile", "reference", "normalize"}
@@ -35,29 +42,15 @@ class BatchEntry:
 
 
 @dataclass(frozen=True)
-class BatchPolicy:
-    max_modified: int = 0
-    max_only: int = 0
-    min_overlap: float = 0.0
-    allow_structural_differences: bool = False
-    fail_transitions: Tuple[str, ...] = ()
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "max_modified": self.max_modified,
-            "max_only": self.max_only,
-            "min_overlap": self.min_overlap,
-            "allow_structural_differences": self.allow_structural_differences,
-            "fail_transitions": list(self.fail_transitions),
-        }
-
-
-@dataclass(frozen=True)
 class BatchItem:
     entry: BatchEntry
     result: ComparisonResult
     passed: bool
     reasons: Tuple[str, ...]
+    warnings: Tuple[str, ...]
+    policy_trace: Tuple[str, ...]
+    matched_rules: Tuple[str, ...]
+    effective_policy: BatchPolicy
     duration_seconds: float
 
     def to_dict(self) -> Dict[str, Any]:
@@ -66,6 +59,10 @@ class BatchItem:
             "stage": self.entry.stage,
             "passed": self.passed,
             "reasons": list(self.reasons),
+            "warnings": list(self.warnings),
+            "matched_policy_rules": list(self.matched_rules),
+            "policy_trace": list(self.policy_trace),
+            "effective_policy": self.effective_policy.to_dict(),
             "duration_seconds": round(self.duration_seconds, 6),
             "comparison": self.result.to_dict(),
         }
@@ -77,6 +74,7 @@ class BatchResult:
     policy: BatchPolicy
     items: Tuple[BatchItem, ...]
     transitions: Dict[str, int] = field(default_factory=dict)
+    policy_document: Optional[PolicyDocument] = None
 
     @property
     def passed(self) -> bool:
@@ -101,6 +99,7 @@ class BatchResult:
     def to_dict(self) -> Dict[str, Any]:
         passed = sum(item.passed for item in self.items)
         return {
+            "gendiff_batch_format": 1,
             "passed": self.passed,
             "manifest": str(self.manifest),
             "summary": {
@@ -109,6 +108,9 @@ class BatchResult:
                 "failed": len(self.items) - passed,
             },
             "policy": self.policy.to_dict(),
+            "policy_document": (
+                self.policy_document.to_dict() if self.policy_document else None
+            ),
             "stage_order": list(self.stage_order),
             "earliest_divergence": self.earliest_divergence,
             "transitions": self.transitions,
@@ -199,36 +201,6 @@ def read_manifest(
     return tuple(entries)
 
 
-def _evaluate(result: ComparisonResult, policy: BatchPolicy) -> Tuple[str, ...]:
-    reasons = []
-    details = result.details
-    if details is None:
-        raise BatchError("batch comparisons require detailed record matching")
-    if details.modified > policy.max_modified:
-        reasons.append(
-            f"modified records {details.modified:,} exceed {policy.max_modified:,}"
-        )
-    only = details.left_only + details.right_only
-    if only > policy.max_only:
-        reasons.append(f"sample-only records {only:,} exceed {policy.max_only:,}")
-    if result.identity_overlap < policy.min_overlap:
-        reasons.append(
-            f"identity overlap {result.identity_overlap:.1%} is below "
-            f"{policy.min_overlap:.1%}"
-        )
-    if not result.structure_equal and not policy.allow_structural_differences:
-        reasons.append("structural header differs")
-    for pattern in policy.fail_transitions:
-        count = sum(
-            value
-            for transition, value in details.transitions.items()
-            if pattern.casefold() in transition.casefold()
-        )
-        if count:
-            reasons.append(f"forbidden transition {pattern!r} occurred {count:,} times")
-    return tuple(reasons)
-
-
 def _compare_entry(
     entry: BatchEntry,
     policy: BatchPolicy,
@@ -239,6 +211,8 @@ def _compare_entry(
     progress: bool,
     temp_dir: Optional[Path],
     diff_dir: Optional[Path],
+    track_dir: Optional[Path],
+    policy_document: Optional[PolicyDocument],
 ) -> BatchItem:
     started = time.perf_counter()
     try:
@@ -258,15 +232,28 @@ def _compare_entry(
             left_label=f"{entry.sample} baseline",
             right_label=f"{entry.sample} candidate",
             diff_dir=diff_dir,
+            track_dir=track_dir,
         )
     except (GenDiffError, OSError, ValueError) as error:
         raise BatchError(f"{entry.sample} / {entry.stage}: {error}") from error
-    reasons = _evaluate(result, policy)
+    effective, matched = resolve_policy(
+        policy,
+        policy_document,
+        sample=entry.sample,
+        stage=entry.stage,
+        kind=result.kind,
+        profile=result.profile,
+    )
+    decision = evaluate_policy(result, effective, matched)
     return BatchItem(
         entry=entry,
         result=result,
-        passed=not reasons,
-        reasons=reasons,
+        passed=not decision.errors,
+        reasons=decision.errors,
+        warnings=decision.warnings,
+        policy_trace=decision.trace,
+        matched_rules=decision.matched_rules,
+        effective_policy=decision.effective,
         duration_seconds=time.perf_counter() - started,
     )
 
@@ -281,15 +268,17 @@ def _run_entries(
     progress: bool,
     temp_dir: Optional[Path],
     diff_workspace: Optional[Path],
+    track_workspace: Optional[Path],
+    policy_document: Optional[PolicyDocument],
 ) -> Tuple[BatchItem, ...]:
-    def output_for(entry: BatchEntry) -> Optional[Path]:
+    def output_for(workspace: Optional[Path], entry: BatchEntry) -> Optional[Path]:
         output = None
-        if diff_workspace is not None:
+        if workspace is not None:
             name = (
                 f"{entry.position + 1:03d}-{safe_slug(entry.sample)}-"
                 f"{safe_slug(entry.stage)}"
             )
-            output = diff_workspace / name
+            output = workspace / name
         return output
 
     if len(entries) == 1:
@@ -304,7 +293,9 @@ def _run_entries(
                 max_examples,
                 progress,
                 temp_dir,
-                output_for(entry),
+                output_for(diff_workspace, entry),
+                output_for(track_workspace, entry),
+                policy_document,
             ),
         )
     workers = min(len(entries), threads)
@@ -319,7 +310,9 @@ def _run_entries(
                 max_examples,
                 progress,
                 temp_dir,
-                output_for(entry),
+                output_for(diff_workspace, entry),
+                output_for(track_workspace, entry),
+                policy_document,
             )
             for entry in entries
         )
@@ -335,7 +328,9 @@ def _run_entries(
                 max_examples,
                 progress,
                 temp_dir,
-                output_for(entry),
+                output_for(diff_workspace, entry),
+                output_for(track_workspace, entry),
+                policy_document,
             )
             for entry in entries
         ]
@@ -356,10 +351,13 @@ def _published_items(
     published = target.absolute()
     updated = []
     for item in items:
-        artifacts = {
-            key: str(published / Path(value).relative_to(workspace))
-            for key, value in item.result.artifacts.items()
-        }
+        artifacts = dict(item.result.artifacts)
+        for key, value in item.result.artifacts.items():
+            try:
+                relative = Path(value).relative_to(workspace)
+            except ValueError:
+                continue
+            artifacts[key] = str(published / relative)
         updated.append(replace(item, result=replace(item.result, artifacts=artifacts)))
     return tuple(updated)
 
@@ -379,9 +377,11 @@ def compare_manifest(
     diff_dir: Optional[Path],
     force: bool,
     policy: BatchPolicy,
+    policy_document: Optional[PolicyDocument] = None,
+    track_dir: Optional[Path] = None,
 ) -> BatchResult:
     entries = read_manifest(manifest, profile, reference, normalize_variants)
-    if diff_dir is None:
+    if diff_dir is None and track_dir is None:
         items = _run_entries(
             entries,
             policy,
@@ -392,15 +392,26 @@ def compare_manifest(
             progress,
             temp_dir,
             None,
+            None,
+            policy_document,
         )
         return BatchResult(
             manifest=manifest,
             policy=policy,
             items=items,
             transitions=_transition_totals(items),
+            policy_document=policy_document,
         )
 
-    with output_workspace(diff_dir, force) as workspace:
+    with ExitStack() as stack:
+        diff_workspace = (
+            stack.enter_context(output_workspace(diff_dir, force)) if diff_dir else None
+        )
+        track_workspace = (
+            stack.enter_context(output_workspace(track_dir, force))
+            if track_dir
+            else None
+        )
         items = _run_entries(
             entries,
             policy,
@@ -410,31 +421,56 @@ def compare_manifest(
             max_examples,
             progress,
             temp_dir,
-            workspace,
+            diff_workspace,
+            track_workspace,
+            policy_document,
         )
-        items = _published_items(items, workspace, diff_dir)
-        write_manifest(
-            workspace / "manifest.json",
-            {
-                "gendiff_diff_format": 1,
-                "kind": "batch",
-                "comparisons": [
-                    {
-                        "sample": item.entry.sample,
-                        "stage": item.entry.stage,
-                        "directory": str(
-                            Path(item.result.artifacts["manifest"]).parent.relative_to(
-                                diff_dir.absolute()
-                            )
-                        ),
-                    }
-                    for item in items
-                ],
-            },
-        )
+        if diff_workspace is not None and diff_dir is not None:
+            items = _published_items(items, diff_workspace, diff_dir)
+            write_manifest(
+                diff_workspace / "manifest.json",
+                {
+                    "gendiff_diff_format": 1,
+                    "kind": "batch",
+                    "comparisons": [
+                        {
+                            "sample": item.entry.sample,
+                            "stage": item.entry.stage,
+                            "directory": str(
+                                Path(
+                                    item.result.artifacts["manifest"]
+                                ).parent.relative_to(diff_dir.absolute())
+                            ),
+                        }
+                        for item in items
+                    ],
+                },
+            )
+        if track_workspace is not None and track_dir is not None:
+            items = _published_items(items, track_workspace, track_dir)
+            write_manifest(
+                track_workspace / "manifest.json",
+                {
+                    "gendiff_diff_format": 1,
+                    "kind": "batch-tracks",
+                    "comparisons": [
+                        {
+                            "sample": item.entry.sample,
+                            "stage": item.entry.stage,
+                            "directory": str(
+                                Path(
+                                    item.result.artifacts["track_manifest"]
+                                ).parent.relative_to(track_dir.absolute())
+                            ),
+                        }
+                        for item in items
+                    ],
+                },
+            )
     return BatchResult(
         manifest=manifest,
         policy=policy,
         items=items,
         transitions=_transition_totals(items),
+        policy_document=policy_document,
     )

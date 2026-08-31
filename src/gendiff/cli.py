@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import List, Optional
 
 from gendiff import __version__
+from gendiff.baseline import (
+    BaselineError,
+    baseline_report,
+    check_baseline,
+    create_baseline,
+)
 from gendiff.batch import BatchError, BatchPolicy, compare_manifest
 from gendiff.batch_report import (
     render_batch_html,
@@ -15,7 +21,9 @@ from gendiff.batch_report import (
     render_multiqc,
 )
 from gendiff.compare import GenDiffError, compare_files
+from gendiff.manifest import ManifestError, pair_directories, render_manifest
 from gendiff.model import ComparisonResult
+from gendiff.policy import PolicyError, load_policy
 from gendiff.profiles import ALL_PROFILES
 from gendiff.report import render_html, render_igv_batch, render_svg, write_text
 
@@ -111,6 +119,12 @@ def _single_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="write only-in and modified records as BAM or VCF files",
     )
+    parser.add_argument(
+        "--tracks",
+        type=Path,
+        metavar="DIR",
+        help="write BED, bedGraph, and per-contig difference tracks",
+    )
     parser.add_argument("--force", action="store_true", help="replace outputs")
     parser.add_argument("--json", action="store_true", help="write JSON output")
     parser.add_argument(
@@ -168,10 +182,20 @@ def _batch_parser() -> argparse.ArgumentParser:
         help="maximum modified records per comparison (default: 0)",
     )
     parser.add_argument(
+        "--max-modified-fraction",
+        type=_proportion,
+        help="maximum modified fraction per comparison",
+    )
+    parser.add_argument(
         "--max-only",
         type=_nonnegative_int,
         default=0,
         help="maximum combined sample-only records per comparison (default: 0)",
+    )
+    parser.add_argument(
+        "--max-only-fraction",
+        type=_proportion,
+        help="maximum sample-only fraction per comparison",
     )
     parser.add_argument(
         "--min-overlap",
@@ -190,6 +214,11 @@ def _batch_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="TEXT",
         help="fail if a transition contains this text; repeat as needed",
+    )
+    parser.add_argument(
+        "--policy",
+        type=Path,
+        help="stage-aware JSON policy file",
     )
     parser.add_argument(
         "--max-examples",
@@ -216,7 +245,54 @@ def _batch_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="write record-level diff files for every comparison",
     )
+    parser.add_argument(
+        "--tracks",
+        type=Path,
+        metavar="DIR",
+        help="write BED, bedGraph, and per-contig tracks for every comparison",
+    )
     parser.add_argument("--force", action="store_true", help="replace outputs")
+    return parser
+
+
+def _manifest_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gendiff manifest",
+        description="Pair matching genomics files in two directory trees.",
+    )
+    parser.add_argument("baseline", type=Path, help="baseline output directory")
+    parser.add_argument("candidate", type=Path, help="candidate output directory")
+    parser.add_argument("--output", type=Path, required=True, help="output TSV")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="print the manifest without writing it"
+    )
+    parser.add_argument("--force", action="store_true", help="replace the output")
+    return parser
+
+
+def _baseline_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gendiff baseline",
+        description="Create or check compact semantic baselines.",
+    )
+    commands = parser.add_subparsers(dest="baseline_command", required=True)
+    create = commands.add_parser("create", help="create a baseline from before files")
+    check = commands.add_parser("check", help="check after files against a baseline")
+    create.add_argument("manifest", type=Path)
+    check.add_argument("baseline", type=Path)
+    check.add_argument("manifest", type=Path)
+    for command in (create, check):
+        command.add_argument("--threads", type=_positive_int, default=2)
+        command.add_argument("--profile", choices=ALL_PROFILES, default="strict")
+        command.add_argument("--reference", type=Path)
+        command.add_argument("--normalize", action="store_true")
+        command.add_argument("--progress", action="store_true")
+    create.add_argument("--output", type=Path, required=True)
+    create.add_argument("--ignore-tag", action="append", default=[])
+    create.add_argument("--ignore-info", action="append", default=[])
+    create.add_argument("--force", action="store_true")
+    check.add_argument("--json", type=Path, help="write machine-readable results")
+    check.add_argument("--force", action="store_true")
     return parser
 
 
@@ -270,8 +346,12 @@ def _render(result: ComparisonResult) -> str:
                 for item in details.top_regions[:5]
             )
             lines.append(f"Top regions: {regions}")
-    if result.artifacts:
+    if "manifest" in result.artifacts:
         lines.append(f"Diff files: {Path(result.artifacts['manifest']).parent}")
+    if "track_manifest" in result.artifacts:
+        lines.append(
+            f"Genomic tracks: {Path(result.artifacts['track_manifest']).parent}"
+        )
     return "\n".join(lines)
 
 
@@ -286,12 +366,14 @@ def _single_main(argv: List[str]) -> int:
                 )
         if len(set(outputs)) != len(outputs):
             raise ValueError("report outputs must use different paths")
-        if args.write_diff and args.write_diff.absolute() in {
-            output.absolute() for output in outputs
-        }:
-            raise ValueError(
-                "diff directory and report outputs must use different paths"
-            )
+        directories = [path for path in (args.write_diff, args.tracks) if path]
+        if len({path.absolute() for path in directories}) != len(directories):
+            raise ValueError("diff and track output directories must differ")
+        if any(
+            directory.absolute() in {output.absolute() for output in outputs}
+            for directory in directories
+        ):
+            raise ValueError("artifact directories and report outputs must differ")
         if args.igv_batch and args.reference is None:
             raise ValueError("--igv-batch requires --reference")
         explain = any(
@@ -301,6 +383,7 @@ def _single_main(argv: List[str]) -> int:
                 args.svg is not None,
                 args.igv_batch,
                 args.write_diff is not None,
+                args.tracks is not None,
             )
         )
         result = compare_files(
@@ -319,6 +402,7 @@ def _single_main(argv: List[str]) -> int:
             left_label=args.name_a,
             right_label=args.name_b,
             diff_dir=args.write_diff,
+            track_dir=args.tracks,
             force=args.force,
         )
         html_report = render_html(result) if args.html else None
@@ -339,6 +423,8 @@ def _single_main(argv: List[str]) -> int:
             print(f"Wrote {args.igv_batch}", file=sys.stderr)
         if args.write_diff:
             print(f"Wrote {args.write_diff}", file=sys.stderr)
+        if args.tracks:
+            print(f"Wrote {args.tracks}", file=sys.stderr)
     except (GenDiffError, OSError, ValueError) as error:
         print(f"gendiff: error: {error}", file=sys.stderr)
         return 2
@@ -365,12 +451,14 @@ def _batch_main(argv: List[str]) -> int:
                 raise FileExistsError(
                     f"output exists: {output}; use --force to replace it"
                 )
-        if args.write_diff and args.write_diff.absolute() in {
-            output.absolute() for output in outputs
-        }:
-            raise ValueError(
-                "diff directory and report outputs must use different paths"
-            )
+        directories = [path for path in (args.write_diff, args.tracks) if path]
+        if len({path.absolute() for path in directories}) != len(directories):
+            raise ValueError("diff and track output directories must differ")
+        if any(
+            directory.absolute() in {output.absolute() for output in outputs}
+            for directory in directories
+        ):
+            raise ValueError("artifact directories and report outputs must differ")
         if args.multiqc and not args.multiqc.name.endswith("_mqc.json"):
             raise ValueError("--multiqc filename must end with _mqc.json")
         if not all(pattern.strip() for pattern in args.fail_transition):
@@ -378,10 +466,13 @@ def _batch_main(argv: List[str]) -> int:
         policy = BatchPolicy(
             max_modified=args.max_modified,
             max_only=args.max_only,
+            max_modified_fraction=args.max_modified_fraction,
+            max_only_fraction=args.max_only_fraction,
             min_overlap=args.min_overlap,
             allow_structural_differences=args.allow_structural_differences,
             fail_transitions=tuple(args.fail_transition),
         )
+        policy_document = load_policy(args.policy) if args.policy else None
         result = compare_manifest(
             args.manifest,
             threads=args.threads,
@@ -396,6 +487,8 @@ def _batch_main(argv: List[str]) -> int:
             diff_dir=args.write_diff,
             force=args.force,
             policy=policy,
+            policy_document=policy_document,
+            track_dir=args.tracks,
         )
         reports = {
             args.html: render_batch_html(result, args.html) if args.html else None,
@@ -413,15 +506,96 @@ def _batch_main(argv: List[str]) -> int:
                 print(f"Wrote {output}", file=sys.stderr)
         if args.write_diff:
             print(f"Wrote {args.write_diff}", file=sys.stderr)
-    except (BatchError, GenDiffError, OSError, ValueError) as error:
+        if args.tracks:
+            print(f"Wrote {args.tracks}", file=sys.stderr)
+    except (BatchError, GenDiffError, PolicyError, OSError, ValueError) as error:
         print(f"gendiff: error: {error}", file=sys.stderr)
         return 2
     print(render_batch_text(result))
     return 0 if result.passed else 1
 
 
+def _manifest_main(argv: List[str]) -> int:
+    args = _manifest_parser().parse_args(argv)
+    try:
+        pairs = pair_directories(args.baseline, args.candidate)
+        content = render_manifest(pairs, args.output)
+        if args.dry_run:
+            print(content, end="")
+        else:
+            write_text(args.output, content, args.force)
+            print(f"Wrote {args.output} ({len(pairs)} comparisons)")
+    except (ManifestError, OSError, ValueError) as error:
+        print(f"gendiff: error: {error}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _baseline_main(argv: List[str]) -> int:
+    args = _baseline_parser().parse_args(argv)
+    try:
+        if args.baseline_command == "create":
+            payload = create_baseline(
+                args.manifest,
+                threads=args.threads,
+                profile=args.profile,
+                reference=args.reference,
+                normalize_variants=args.normalize,
+                ignore_tags=args.ignore_tag,
+                ignore_info=args.ignore_info,
+                progress=args.progress,
+            )
+            write_text(
+                args.output,
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                args.force,
+            )
+            print(f"Wrote {args.output} ({len(payload['comparisons'])} comparisons)")
+            return 0
+        checks = check_baseline(
+            args.baseline,
+            args.manifest,
+            threads=args.threads,
+            profile=args.profile,
+            reference=args.reference,
+            normalize_variants=args.normalize,
+            progress=args.progress,
+        )
+        report = baseline_report(checks)
+        if args.json:
+            write_text(
+                args.json,
+                json.dumps(report, indent=2, sort_keys=True) + "\n",
+                args.force,
+            )
+        print(
+            f"Passed: {'yes' if report['passed'] else 'no'}\n"
+            f"Comparisons: {report['summary']['comparisons']} "
+            f"({report['summary']['passed']} passed, "
+            f"{report['summary']['failed']} failed)"
+        )
+        for item in checks:
+            fields = (
+                f"; fields: {', '.join(item.changed_fields)}"
+                if item.changed_fields
+                else ""
+            )
+            print(
+                f"  {'PASS' if item.passed else 'FAIL'}  {item.sample} / "
+                f"{item.stage}{fields}"
+            )
+        return 0 if report["passed"] else 1
+    except (BaselineError, BatchError, GenDiffError, OSError, ValueError) as error:
+        print(f"gendiff: error: {error}", file=sys.stderr)
+        return 2
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     values = list(sys.argv[1:] if argv is None else argv)
     if values and values[0] == "batch":
         return _batch_main(values[1:])
+    if values and values[0] == "manifest":
+        return _manifest_main(values[1:])
+    if values and values[0] == "baseline":
+        return _baseline_main(values[1:])
     return _single_main(values)

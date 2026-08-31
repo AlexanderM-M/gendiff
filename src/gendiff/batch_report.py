@@ -31,6 +31,10 @@ def render_batch_text(result: BatchResult) -> str:
         )
         for reason in item.reasons:
             lines.append(f"        {reason}")
+        for warning in item.warnings:
+            lines.append(f"        WARNING: {warning}")
+        if item.matched_rules:
+            lines.append(f"        Policy: {', '.join(item.matched_rules)}")
     if result.earliest_divergence:
         lines.append("Earliest divergence:")
         for sample, stage in result.earliest_divergence.items():
@@ -47,15 +51,23 @@ def _table(headers: Iterable[str], rows: Iterable[Iterable[str]]) -> str:
 
 
 def _artifact_link(item: BatchItem, report_path: Optional[Path]) -> str:
-    manifest = item.result.artifacts.get("manifest")
-    if manifest is None:
+    manifests = [
+        ("diff files", item.result.artifacts.get("manifest")),
+        ("tracks", item.result.artifacts.get("track_manifest")),
+    ]
+    manifests = [(label, value) for label, value in manifests if value is not None]
+    if not manifests:
         return "—"
-    directory = Path(manifest).parent
-    if report_path is None:
-        return escape(directory.name)
-    relative = os.path.relpath(directory, report_path.absolute().parent)
-    href = escape(Path(relative).as_posix(), quote=True)
-    return f'<a href="{href}/manifest.json">diff files</a>'
+    links = []
+    for label, manifest in manifests:
+        directory = Path(manifest).parent
+        if report_path is None:
+            links.append(escape(label))
+            continue
+        relative = os.path.relpath(directory, report_path.absolute().parent)
+        href = escape(Path(relative).as_posix(), quote=True)
+        links.append(f'<a href="{href}/manifest.json">{escape(label)}</a>')
+    return " · ".join(links)
 
 
 def render_batch_html(result: BatchResult, report_path: Optional[Path] = None) -> str:
@@ -68,6 +80,8 @@ def render_batch_html(result: BatchResult, report_path: Optional[Path] = None) -
         modified = details.modified if details else 0
         only = details.left_only + details.right_only if details else 0
         reasons = "; ".join(item.reasons) or "—"
+        warnings = "; ".join(item.warnings) or "—"
+        policy_rules = ", ".join(item.matched_rules) or "defaults"
         comparison_rows.append(
             (
                 escape(item.entry.sample),
@@ -81,6 +95,8 @@ def render_batch_html(result: BatchResult, report_path: Optional[Path] = None) -
                 f"{modified:,}",
                 f"{only:,}",
                 escape(reasons),
+                escape(warnings),
+                escape(policy_rules),
                 _artifact_link(item, report_path),
             )
         )
@@ -133,6 +149,8 @@ def render_batch_html(result: BatchResult, report_path: Optional[Path] = None) -
             "Modified",
             "Only",
             "Reason",
+            "Warning",
+            "Policy",
             "Artifacts",
         ),
         comparison_rows,
@@ -215,6 +233,15 @@ def render_junit(result: BatchResult) -> str:
                 {"message": message, "type": "GenDiffRegression"},
             )
             failure.text = message
+        decision_text = "\n".join(
+            [
+                *(f"rule: {name}" for name in item.matched_rules),
+                *(f"warning: {warning}" for warning in item.warnings),
+                *item.policy_trace,
+            ]
+        )
+        if decision_text:
+            ET.SubElement(case, "system-out").text = decision_text
     ET.indent(suite, space="  ")
     return ET.tostring(suite, encoding="utf-8", xml_declaration=True).decode("utf-8")
 

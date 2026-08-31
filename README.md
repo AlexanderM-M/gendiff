@@ -55,10 +55,12 @@ gendiff old.vcf.gz new.bcf --normalize --reference reference.fa
 gendiff old.bam new.bam --html comparison.html
 gendiff old.bam new.bam --svg comparison.svg
 gendiff old.bam new.bam --write-diff diff-records
+gendiff old.bam new.bam --tracks genomic-tracks
 gendiff old.bam new.bam --reference reference.fa --igv-batch differences.igv.batch
 gendiff old.bam new.bam --threads 8 --progress
 gendiff old.vcf.gz new.bcf --json
 gendiff batch comparisons.tsv --html regression.html --junit regression.xml
+gendiff manifest baseline-run candidate-run --output comparisons.tsv
 ```
 
 Exit status is `0` when inputs are semantically equivalent, `1` when they differ,
@@ -82,6 +84,10 @@ threads are requested. Other inputs still scan both files concurrently.
 each input and the before/after versions of modified records. A small manifest
 records the labels, comparison profile, filenames, and record counts. These files
 can be passed directly to samtools, bcftools, IGV, or downstream workflows.
+
+`--tracks DIR` writes a BED file of affected loci, a bedGraph of difference
+density, and a per-contig TSV. These files work directly with IGV, bedtools, and
+other genome browsers.
 
 Reference-aware VCF normalization follows bcftools semantics and requires an
 indexed FASTA. HTML reports are self-contained, while SVG summaries can be used
@@ -119,8 +125,38 @@ continues to reject genotype transitions even when some modified records are
 allowed. Optional manifest columns are `profile`, `reference`, and `normalize`;
 relative paths are resolved from the manifest directory.
 
+For stage-specific acceptance rules, pass a versioned JSON policy:
+
+```bash
+gendiff batch comparisons.tsv --policy examples/policy.json --json gendiff-batch.json
+```
+
+Rules can match sample, stage, file kind, and profile. They support absolute and
+relative limits, allowed or forbidden changed fields and transitions, and
+error, warning, or informational severity. Reports record the matched rule and
+the decision trace. Unapproved transitions fail by default when a policy file is
+used, and later matching rules override earlier settings.
+
+To create the manifest from matching directory trees, use `gendiff manifest`.
+It pairs relative paths exactly and stops if either tree has missing or ambiguous
+files. Add `--dry-run` to inspect the TSV without writing it.
+
+Compact baselines preserve semantic hashes and counts without storing read names,
+loci, sequences, or whole input files:
+
+```bash
+gendiff baseline create comparisons.tsv --output pipeline-baseline.gendiff.json
+gendiff baseline check pipeline-baseline.gendiff.json comparisons.tsv
+```
+
+Baseline checks detect changes to logical fields and structural headers. Keep the
+original baseline files when record-level diff files or transition explanations
+may be needed later.
+
 The aggregate JSON is intended for automation, JUnit integrates with CI systems,
 and filenames ending in `_mqc.json` are discovered by MultiQC as custom content.
+Installing `gendiff[multiqc]` also provides a native MultiQC module; name the
+aggregate JSON `gendiff-batch.json` so it is discovered automatically.
 
 Some Linux distributions provide an unrelated `/usr/bin/gendiff`; install GenDiff
 in a virtual environment or invoke it as `python -m gendiff`. GenDiff is not a

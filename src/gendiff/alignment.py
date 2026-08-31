@@ -30,6 +30,7 @@ from gendiff.fingerprint import (
 )
 from gendiff.model import ComparisonResult
 from gendiff.progress import ProgressReporter
+from gendiff.tracks import contig_lengths, write_tracks
 
 
 @dataclass(frozen=True)
@@ -447,6 +448,7 @@ def compare_alignments(
     progress: bool,
     temp_dir: Optional[Path],
     diff_dir: Optional[Path],
+    track_dir: Optional[Path],
     force: bool,
 ) -> ComparisonResult:
     artifacts: Dict[str, str] = {}
@@ -476,6 +478,7 @@ def compare_alignments(
         )
         overlap = sketch_containment(left_scan.sketch, right_scan.sketch)
         selection_path = Path(work) / "selections.sqlite" if diff_dir else None
+        track_path = Path(work) / "tracks.sqlite" if track_dir else None
         details = (
             analyze_details(
                 left_details,
@@ -483,24 +486,36 @@ def compare_alignments(
                 fields,
                 max_examples,
                 selection_path,
+                track_path,
             )
             if explain and left_details and right_details
             else None
         )
         if diff_dir and selection_path:
-            artifacts = _write_diff_outputs(
-                left,
-                right,
-                reference,
-                threads,
-                fields,
-                profile,
-                ignore_tags,
-                selection_path,
-                diff_dir,
-                force,
-                left_label,
-                right_label,
+            artifacts.update(
+                _write_diff_outputs(
+                    left,
+                    right,
+                    reference,
+                    threads,
+                    fields,
+                    profile,
+                    ignore_tags,
+                    selection_path,
+                    diff_dir,
+                    force,
+                    left_label,
+                    right_label,
+                )
+            )
+        if track_dir and track_path:
+            artifacts.update(
+                write_tracks(
+                    track_path,
+                    track_dir,
+                    force,
+                    contig_lengths(left_scan.structural, right_scan.structural),
+                )
             )
     return ComparisonResult(
         kind="alignment",

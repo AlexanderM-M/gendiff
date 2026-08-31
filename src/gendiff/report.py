@@ -72,7 +72,7 @@ def render_html(result: ComparisonResult) -> str:
                     ("Transition", "Records"),
                     (
                         (transition, f"{count:,}")
-                        for transition, count in details.transitions.items()
+                        for transition, count in list(details.transitions.items())[:50]
                     ),
                 )
                 + "</section>"

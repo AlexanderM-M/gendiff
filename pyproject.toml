@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gendiff"
-version = "0.5.0"
+version = "0.6.0"
 description = "Semantic comparison for genomics files"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -34,9 +34,16 @@ Issues = "https://github.com/AlexanderM-M/gendiff/issues"
 
 [project.optional-dependencies]
 test = ["pytest>=7", "ruff>=0.8"]
+multiqc = ["multiqc>=1.25"]
 
 [project.scripts]
 gendiff = "gendiff.cli:main"
+
+[project.entry-points."multiqc.modules.v1"]
+gendiff = "gendiff.multiqc:MultiqcModule"
+
+[project.entry-points."multiqc.hooks.v1"]
+config_loaded = "gendiff.multiqc_config:configure"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

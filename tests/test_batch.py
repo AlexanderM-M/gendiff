@@ -120,6 +120,7 @@ def test_batch_cli_writes_all_outputs_and_real_diffs(capsys, tmp_path: Path) -> 
     junit = tmp_path / "regression.xml"
     multiqc = tmp_path / "gendiff_mqc.json"
     diffs = tmp_path / "diffs"
+    tracks = tmp_path / "tracks"
 
     status = main(
         [
@@ -137,6 +138,8 @@ def test_batch_cli_writes_all_outputs_and_real_diffs(capsys, tmp_path: Path) -> 
             str(multiqc),
             "--write-diff",
             str(diffs),
+            "--tracks",
+            str(tracks),
         ]
     )
 
@@ -161,6 +164,11 @@ def test_batch_cli_writes_all_outputs_and_real_diffs(capsys, tmp_path: Path) -> 
     modified = child / child_manifest["files"]["modified_second"]
     with pysam.VariantFile(modified) as handle:
         assert [record.pos for record in handle] == [10]
+
+    track_manifest = json.loads((tracks / "manifest.json").read_text())
+    assert track_manifest["kind"] == "batch-tracks"
+    track_child = tracks / track_manifest["comparisons"][0]["directory"]
+    assert (track_child / "changes.bed").read_text().startswith("chr1\t9\t10")
 
     assert main(["batch", str(manifest), "--html", str(html)]) == 2
 

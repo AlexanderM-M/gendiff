@@ -1,0 +1,49 @@
+{
+  "gendiff_policy": 1,
+  "defaults": {
+    "max_modified": 0,
+    "max_only": 0,
+    "transition_default": "allow"
+  },
+  "rules": [
+    {
+      "name": "review small alignment changes",
+      "match": {
+        "stage": "alignment*",
+        "kind": "alignment"
+      },
+      "set": {
+        "max_modified": null,
+        "max_modified_fraction": 0.005,
+        "allow_fields": [
+          "mapping_quality",
+          "tags"
+        ],
+        "allow_transitions": [
+          "MAPQ:*",
+          "tag *"
+        ],
+        "transition_default": "fail",
+        "severity": "warning"
+      }
+    },
+    {
+      "name": "protect variant calls",
+      "match": {
+        "stage": "variant*",
+        "kind": "variant"
+      },
+      "set": {
+        "deny_fields": [
+          "filters",
+          "samples"
+        ],
+        "deny_transitions": [
+          "filters:*",
+          "genotype *"
+        ],
+        "severity": "error"
+      }
+    }
+  ]
+}

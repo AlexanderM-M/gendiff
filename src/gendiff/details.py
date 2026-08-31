@@ -149,6 +149,35 @@ class SelectionReader:
         self._connection.close()
 
 
+class TrackWriter:
+    """Aggregate changed genomic positions in a disk-backed table."""
+
+    def __init__(self, path: Path) -> None:
+        self._connection = sqlite3.connect(str(path))
+        self._connection.execute("PRAGMA journal_mode=OFF")
+        self._connection.execute("PRAGMA synchronous=OFF")
+        self._connection.execute(
+            "CREATE TABLE loci ("
+            "contig TEXT NOT NULL, start INTEGER NOT NULL, status TEXT NOT NULL, "
+            "count INTEGER NOT NULL, PRIMARY KEY (contig, start, status))"
+        )
+
+    def add(self, summary: Dict[str, Any], status: str) -> None:
+        location = _location(summary)
+        if location is None:
+            return
+        contig, position = location
+        self._connection.execute(
+            "INSERT INTO loci VALUES (?, ?, ?, 1) "
+            "ON CONFLICT(contig, start, status) DO UPDATE SET count=count+1",
+            (contig, position - 1, status),
+        )
+
+    def close(self) -> None:
+        self._connection.commit()
+        self._connection.close()
+
+
 @dataclass(frozen=True)
 class _StoredRecord:
     full: bytes
@@ -395,6 +424,7 @@ def analyze_details(
     fields: Sequence[str],
     max_examples: int,
     selection_path: Optional[Path] = None,
+    track_path: Optional[Path] = None,
 ) -> DifferenceDetails:
     left_groups = iter(_groups(left_path))
     right_groups = iter(_groups(right_path))
@@ -408,6 +438,7 @@ def analyze_details(
     examples: List[Dict[str, Any]] = []
     loci: List[str] = []
     selector = SelectionWriter(selection_path) if selection_path else None
+    tracks = TrackWriter(track_path) if track_path else None
 
     try:
         while left_group is not None or right_group is not None:
@@ -420,6 +451,8 @@ def analyze_details(
                     if selector:
                         selector.add(0, identity, record, "only")
                     summary = json.loads(record.summary)
+                    if tracks:
+                        tracks.add(summary, "only_in_first")
                     _record_location(summary, regions, loci, max_examples)
                     if len(examples) < max_examples:
                         examples.append(
@@ -434,6 +467,8 @@ def analyze_details(
                     if selector:
                         selector.add(1, identity, record, "only")
                     summary = json.loads(record.summary)
+                    if tracks:
+                        tracks.add(summary, "only_in_second")
                     _record_location(summary, regions, loci, max_examples)
                     if len(examples) < max_examples:
                         examples.append(
@@ -465,6 +500,10 @@ def analyze_details(
                 field_changes.update(changed)
                 left_summary = json.loads(left_record.summary)
                 right_summary = json.loads(right_record.summary)
+                if tracks:
+                    tracks.add(right_summary, "modified")
+                    if _location(left_summary) != _location(right_summary):
+                        tracks.add(left_summary, "modified_previous")
                 transitions.update(
                     _transition_counts(left_summary, right_summary, changed)
                 )
@@ -497,6 +536,11 @@ def analyze_details(
                     if selector:
                         selector.add(1, identity, record, "only")
                 summary = json.loads(record.summary)
+                if tracks:
+                    tracks.add(
+                        summary,
+                        f"only_in_{'first' if side == 'left_only' else 'second'}",
+                    )
                 _record_location(summary, regions, loci, max_examples)
                 if len(examples) < max_examples:
                     examples.append(
@@ -513,6 +557,8 @@ def analyze_details(
     finally:
         if selector:
             selector.close()
+        if tracks:
+            tracks.close()
 
     return DifferenceDetails(
         identical=identical,
@@ -520,7 +566,7 @@ def analyze_details(
         left_only=left_only,
         right_only=right_only,
         field_changes=dict(field_changes.most_common()),
-        transitions=dict(transitions.most_common(50)),
+        transitions=dict(transitions.most_common()),
         top_regions=[
             {"region": region, "changes": changes}
             for region, changes in regions.most_common(20)

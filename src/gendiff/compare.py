@@ -89,6 +89,7 @@ def compare_files(
     left_label: Optional[str] = None,
     right_label: Optional[str] = None,
     diff_dir: Optional[Path] = None,
+    track_dir: Optional[Path] = None,
     force: bool = False,
 ) -> ComparisonResult:
     if threads < 1:
@@ -107,6 +108,13 @@ def compare_files(
         resolved_diff = diff_dir.absolute()
         if resolved_diff in {left.absolute(), right.absolute()}:
             raise GenDiffError("diff output directory cannot be an input file")
+    if track_dir is not None:
+        explain = True
+        resolved_tracks = track_dir.absolute()
+        if resolved_tracks in {left.absolute(), right.absolute()}:
+            raise GenDiffError("track output directory cannot be an input file")
+        if diff_dir is not None and resolved_tracks == diff_dir.absolute():
+            raise GenDiffError("diff and track output directories must differ")
     labels = _input_labels(left, right, left_label, right_label)
 
     left_kind = _kind(left)
@@ -137,6 +145,7 @@ def compare_files(
             progress,
             temp_dir,
             diff_dir,
+            track_dir,
             force,
         )
     if ignore_tags:
@@ -165,5 +174,6 @@ def compare_files(
         progress,
         temp_dir,
         diff_dir,
+        track_dir,
         force,
     )
