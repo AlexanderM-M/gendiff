@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -21,10 +22,13 @@ from gendiff.batch_report import (
     render_multiqc,
 )
 from gendiff.compare import GenDiffError, compare_files
+from gendiff.identity import compare_identity, render_identity
 from gendiff.manifest import ManifestError, pair_directories, render_manifest
+from gendiff.matrix import compare_matrix, render_matrix_html, render_matrix_text
 from gendiff.model import ComparisonResult
 from gendiff.policy import PolicyError, load_policy
 from gendiff.profiles import ALL_PROFILES
+from gendiff.provenance import reproducibility_manifest
 from gendiff.report import render_html, render_igv_batch, render_svg, write_text
 
 
@@ -53,7 +57,10 @@ def _single_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gendiff",
         description="Compare the logical contents of two genomics files.",
-        epilog="Use 'gendiff batch --help' for pipeline regression comparisons.",
+        epilog=(
+            "Subcommands: batch, baseline, manifest, matrix, and identity. "
+            "Run 'gendiff COMMAND --help' for details."
+        ),
     )
     parser.add_argument("sample_a", type=Path, help="first BAM, CRAM, VCF, or BCF")
     parser.add_argument("sample_b", type=Path, help="second file")
@@ -110,6 +117,12 @@ def _single_parser() -> argparse.ArgumentParser:
         type=Path,
         help="temporary storage for detailed record matching",
     )
+    parser.add_argument(
+        "--cache",
+        type=Path,
+        metavar="DIR",
+        help="reuse validated scan and matching data",
+    )
     parser.add_argument("--html", type=Path, help="write a self-contained HTML report")
     parser.add_argument("--svg", type=Path, help="write a standalone SVG summary")
     parser.add_argument("--igv-batch", type=Path, help="write an IGV batch file")
@@ -146,6 +159,12 @@ def _single_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--force", action="store_true", help="replace outputs")
     parser.add_argument("--json", action="store_true", help="write JSON output")
+    parser.add_argument(
+        "--reproducibility",
+        type=Path,
+        metavar="FILE",
+        help="write checksums and settings for exact reproduction",
+    )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
@@ -249,6 +268,7 @@ def _batch_parser() -> argparse.ArgumentParser:
         "--progress", action="store_true", help="report progress to standard error"
     )
     parser.add_argument("--temp-dir", type=Path, help="temporary matching storage")
+    parser.add_argument("--cache", type=Path, metavar="DIR", help="shared scan cache")
     parser.add_argument("--html", type=Path, help="write aggregate HTML")
     parser.add_argument("--json", type=Path, help="write aggregate JSON")
     parser.add_argument("--junit", type=Path, help="write JUnit XML")
@@ -289,6 +309,40 @@ def _manifest_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _matrix_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gendiff matrix",
+        description="Compare many genomics files in a similarity matrix.",
+    )
+    parser.add_argument("files", nargs="+", type=Path)
+    parser.add_argument("--threads", type=_positive_int, default=2)
+    parser.add_argument("--profile", choices=ALL_PROFILES, default="strict")
+    parser.add_argument("--reference", type=Path)
+    parser.add_argument("--normalize", action="store_true")
+    parser.add_argument("--ignore-tag", action="append", default=[])
+    parser.add_argument("--ignore-info", action="append", default=[])
+    parser.add_argument("--cache", type=Path, metavar="DIR")
+    parser.add_argument("--html", type=Path)
+    parser.add_argument("--json", type=Path)
+    parser.add_argument("--force", action="store_true")
+    return parser
+
+
+def _identity_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gendiff identity",
+        description="Check whether two files represent the same biological sample.",
+    )
+    parser.add_argument("sample_a", type=Path)
+    parser.add_argument("sample_b", type=Path)
+    parser.add_argument("--sites", type=Path, help="known SNPs for BAM/CRAM inputs")
+    parser.add_argument("--reference", type=Path, help="reference FASTA for CRAM")
+    parser.add_argument("--min-depth", type=_positive_int, default=5)
+    parser.add_argument("--json", type=Path)
+    parser.add_argument("--force", action="store_true")
+    return parser
+
+
 def _baseline_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gendiff baseline",
@@ -325,6 +379,7 @@ def _render(result: ComparisonResult) -> str:
         f"Type: {result.kind}",
         f"Relationship: {result.relationship}",
         f"Identity overlap: {result.identity_overlap:.1%}",
+        f"Content similarity: {result.content_similarity:.1%}",
         f"Profile: {result.profile}",
         "Inputs:",
         f"  {result.left_label}: {result.left} ({result.left_records:,} records)",
@@ -336,6 +391,9 @@ def _render(result: ComparisonResult) -> str:
     if result.changed_fields:
         fields = ", ".join(field.replace("_", " ") for field in result.changed_fields)
         lines.append(f"Changed fields: {fields}")
+    if result.header_differences:
+        lines.append("Header differences:")
+        lines.extend(f"  - {value}" for value in result.header_differences[:10])
     if result.details is not None:
         details = result.details
         lines.extend(
@@ -368,21 +426,38 @@ def _render(result: ComparisonResult) -> str:
         if details.findings:
             lines.append("What changed:")
             lines.extend(f"  - {finding}" for finding in details.findings)
+        if details.group_changes:
+            groups = ", ".join(
+                f"{name}={count:,}"
+                for name, count in list(details.group_changes.items())[:5]
+            )
+            lines.append(f"Read-group attribution: {groups}")
     if "manifest" in result.artifacts:
         lines.append(f"Diff files: {Path(result.artifacts['manifest']).parent}")
     if "track_manifest" in result.artifacts:
         lines.append(
             f"Genomic tracks: {Path(result.artifacts['track_manifest']).parent}"
         )
+    if result.cache:
+        lines.append(
+            f"Cache: {result.cache.get('first')} / {result.cache.get('second')}"
+        )
     return "\n".join(lines)
 
 
 def _single_main(argv: List[str]) -> int:
+    started = time.perf_counter()
     args = _single_parser().parse_args(argv)
     try:
         outputs = [
             output
-            for output in (args.html, args.svg, args.igv_batch, args.difference_table)
+            for output in (
+                args.html,
+                args.svg,
+                args.igv_batch,
+                args.difference_table,
+                args.reproducibility,
+            )
             if output
         ]
         for output in outputs:
@@ -392,9 +467,18 @@ def _single_main(argv: List[str]) -> int:
                 )
         if len(set(outputs)) != len(outputs):
             raise ValueError("report outputs must use different paths")
+        if any(
+            output.absolute() in {args.sample_a.absolute(), args.sample_b.absolute()}
+            for output in outputs
+        ):
+            raise ValueError("report output cannot replace an input file")
         directories = [path for path in (args.write_diff, args.tracks) if path]
         if len({path.absolute() for path in directories}) != len(directories):
             raise ValueError("diff and track output directories must differ")
+        if args.cache and any(
+            args.cache.absolute() == directory.absolute() for directory in directories
+        ):
+            raise ValueError("cache and artifact directories must differ")
         if any(
             directory.absolute() in {output.absolute() for output in outputs}
             for directory in directories
@@ -434,6 +518,7 @@ def _single_main(argv: List[str]) -> int:
             regions=args.region,
             regions_file=args.regions,
             exclude_regions=args.exclude_regions,
+            cache_dir=args.cache,
             force=args.force,
         )
         html_report = render_html(result) if args.html else None
@@ -458,6 +543,19 @@ def _single_main(argv: List[str]) -> int:
             print(f"Wrote {args.tracks}", file=sys.stderr)
         if args.difference_table:
             print(f"Wrote {args.difference_table}", file=sys.stderr)
+        if args.reproducibility:
+            manifest = reproducibility_manifest(
+                result,
+                argv,
+                args.reference,
+                time.perf_counter() - started,
+            )
+            write_text(
+                args.reproducibility,
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                args.force,
+            )
+            print(f"Wrote {args.reproducibility}", file=sys.stderr)
     except (GenDiffError, OSError, ValueError) as error:
         print(f"gendiff: error: {error}", file=sys.stderr)
         return 2
@@ -522,6 +620,7 @@ def _batch_main(argv: List[str]) -> int:
             policy=policy,
             policy_document=policy_document,
             track_dir=args.tracks,
+            cache_dir=args.cache,
         )
         reports = {
             args.html: render_batch_html(result, args.html) if args.html else None,
@@ -562,6 +661,83 @@ def _manifest_main(argv: List[str]) -> int:
         print(f"gendiff: error: {error}", file=sys.stderr)
         return 2
     return 0
+
+
+def _matrix_main(argv: List[str]) -> int:
+    args = _matrix_parser().parse_args(argv)
+    try:
+        outputs = [value for value in (args.html, args.json) if value]
+        if len({value.absolute() for value in outputs}) != len(outputs):
+            raise ValueError("matrix outputs must use different paths")
+        for output in outputs:
+            if output.exists() and not args.force:
+                raise FileExistsError(
+                    f"output exists: {output}; use --force to replace it"
+                )
+            if output.absolute() in {path.absolute() for path in args.files}:
+                raise ValueError("matrix output cannot replace an input file")
+        result = compare_matrix(
+            args.files,
+            threads=args.threads,
+            profile=args.profile,
+            reference=args.reference,
+            normalize_variants=args.normalize,
+            ignore_tags=args.ignore_tag,
+            ignore_info=args.ignore_info,
+            cache_dir=args.cache,
+        )
+        if args.html:
+            write_text(args.html, render_matrix_html(result), args.force)
+        if args.json:
+            write_text(
+                args.json,
+                json.dumps(result.to_dict(), indent=2, sort_keys=True) + "\n",
+                args.force,
+            )
+        print(render_matrix_text(result))
+        return 0
+    except (GenDiffError, OSError, ValueError) as error:
+        print(f"gendiff: error: {error}", file=sys.stderr)
+        return 2
+
+
+def _identity_main(argv: List[str]) -> int:
+    args = _identity_parser().parse_args(argv)
+    try:
+        for path in (args.sample_a, args.sample_b):
+            if not path.is_file():
+                raise ValueError(f"file not found: {path}")
+        if args.sites and not args.sites.is_file():
+            raise ValueError(f"known-sites file not found: {args.sites}")
+        if args.reference and not args.reference.is_file():
+            raise ValueError(f"reference not found: {args.reference}")
+        if args.json and args.json.exists() and not args.force:
+            raise FileExistsError(
+                f"output exists: {args.json}; use --force to replace it"
+            )
+        if args.json and args.json.absolute() in {
+            args.sample_a.absolute(),
+            args.sample_b.absolute(),
+        }:
+            raise ValueError("identity output cannot replace an input file")
+        result = compare_identity(
+            args.sample_a,
+            args.sample_b,
+            sites=args.sites,
+            reference=args.reference,
+            min_depth=args.min_depth,
+        )
+        if args.json:
+            write_text(
+                args.json,
+                json.dumps(result.to_dict(), indent=2, sort_keys=True) + "\n",
+                args.force,
+            )
+        print(render_identity(result))
+        return 0 if result.passed else 1
+    except (OSError, ValueError) as error:
+        print(f"gendiff: error: {error}", file=sys.stderr)
+        return 2
 
 
 def _baseline_main(argv: List[str]) -> int:
@@ -629,6 +805,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _batch_main(values[1:])
     if values and values[0] == "manifest":
         return _manifest_main(values[1:])
+    if values and values[0] == "matrix":
+        return _matrix_main(values[1:])
+    if values and values[0] == "identity":
+        return _identity_main(values[1:])
     if values and values[0] == "baseline":
         return _baseline_main(values[1:])
     return _single_main(values)

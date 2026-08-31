@@ -12,6 +12,7 @@ Equivalent: no
 Type: alignment
 Relationship: different datasets
 Identity overlap: 0.0%
+Content similarity: 0.0%
 Inputs:
   Sample A: sample-a.merged.bam (9,398 records)
   Sample B: sample-b.merged.bam (147,213 records)
@@ -61,9 +62,14 @@ gendiff old.bam new.bam --region chr1:100000-200000
 gendiff old.bam new.bam --regions targets.bed --exclude-regions blacklist.bed
 gendiff old.bam new.bam --reference reference.fa --igv-batch differences.igv.batch
 gendiff old.bam new.bam --threads 8 --progress
+gendiff old.bam new.bam --cache /scratch/gendiff-cache
+gendiff old.bam new.bam --reproducibility comparison.json
 gendiff old.vcf.gz new.bcf --json
 gendiff batch comparisons.tsv --html regression.html --junit regression.xml
 gendiff manifest baseline-run candidate-run --output comparisons.tsv
+gendiff matrix run/*.bam --html cohort.html --cache /scratch/gendiff-cache
+gendiff identity old.vcf.gz new.vcf.gz
+gendiff identity old.bam new.bam --sites fingerprint-sites.vcf.gz
 ```
 
 Exit status is `0` when inputs are semantically equivalent, `1` when they differ,
@@ -82,6 +88,13 @@ record matching and reports both changed fields and transitions such as MAPQ,
 mapping status, flags, filters, and genotypes. Use `--temp-dir` to select scratch
 storage. With indexed alignment files, both scanning and detailed matching are
 divided by contig when more than two threads are requested.
+
+`--cache DIR` reuses validated semantic scans and disk-backed matching data. The
+key includes the input path, size, nanosecond modification time, GenDiff version,
+reference metadata, profile, ignored fields, and region filters. Completed input
+scans survive an interrupted comparison and are resumed on the next invocation.
+Caches created for detailed comparisons contain record summaries and should be
+protected like the source data.
 
 Limit a comparison with repeatable `--region` values or a BED file passed to
 `--regions`; `--exclude-regions` removes unwanted intervals. Coordinates passed
@@ -105,6 +118,24 @@ a normalized genome-wide difference and coverage map. A MAPQ or genotype
 transition matrix appears when applicable; detailed tables stay collapsed. SVG
 summaries can be used directly in documents and presentations. IGV output is a
 batch file that loads both inputs and visits example changed loci.
+
+Header diagnostics identify reference, contig, read-group, sample, INFO, FORMAT,
+and FILTER definition changes. Record differences are attributed to BAM read
+groups or VCF samples when possible. `--reproducibility FILE` writes input and
+reference SHA-256 checksums, the exact command, settings, result, version, and
+runtime.
+
+## Cohorts and sample identity
+
+`gendiff matrix` scans each file once and creates a clustered semantic-similarity
+matrix, with likely outliers highlighted. It accepts the normal profile,
+normalization, reference, and ignored-field options.
+
+`gendiff identity` compares genotype fingerprints and reports the best sample
+matches. VCF/BCF inputs work directly. Indexed BAM/CRAM inputs require a
+biallelic SNP panel through `--sites`; CRAM may additionally require
+`--reference`. Low-call results are reported as insufficient rather than treated
+as a match. Identity checking is a swap guard, not a contamination estimate.
 
 ## Pipeline regression
 

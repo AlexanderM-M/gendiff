@@ -471,6 +471,7 @@ def analyze_details(
     field_changes = Counter()
     regions = Counter()
     sample_changes = Counter()
+    group_changes = Counter()
     transitions = Counter()
     examples: List[Dict[str, Any]] = []
     loci: List[str] = []
@@ -512,6 +513,8 @@ def analyze_details(
                     if selector:
                         selector.add(0, identity, record, "only")
                     summary = json.loads(record.summary)
+                    if summary.get("read_group"):
+                        group_changes[summary["read_group"]] += 1
                     if tracks:
                         tracks.add(summary, "only_in_first")
                     _record_location(summary, regions, loci, max_examples)
@@ -525,6 +528,8 @@ def analyze_details(
                     if selector:
                         selector.add(1, identity, record, "only")
                     summary = json.loads(record.summary)
+                    if summary.get("read_group"):
+                        group_changes[summary["read_group"]] += 1
                     if tracks:
                         tracks.add(summary, "only_in_second")
                     _record_location(summary, regions, loci, max_examples)
@@ -555,6 +560,11 @@ def analyze_details(
                 field_changes.update(changed)
                 left_summary = json.loads(left_record.summary)
                 right_summary = json.loads(right_record.summary)
+                group = right_summary.get("read_group") or left_summary.get(
+                    "read_group"
+                )
+                if group:
+                    group_changes[group] += 1
                 if tracks:
                     tracks.add(right_summary, "modified")
                     if _location(left_summary) != _location(right_summary):
@@ -582,6 +592,8 @@ def analyze_details(
                     if selector:
                         selector.add(1, identity, record, "only")
                 summary = json.loads(record.summary)
+                if summary.get("read_group"):
+                    group_changes[summary["read_group"]] += 1
                 if tracks:
                     tracks.add(
                         summary,
@@ -633,6 +645,8 @@ def analyze_details(
         right_only,
         contig_changes,
         shifts,
+        group_changes,
+        sample_changes,
     )
     first_windows = left_windows or {}
     second_windows = right_windows or {}
@@ -686,6 +700,7 @@ def analyze_details(
         contig_stats=contig_stats,
         distribution_shifts=shifts,
         findings=findings,
+        group_changes=dict(group_changes.most_common()),
     )
 
 
@@ -696,6 +711,8 @@ def _findings(
     right_only: int,
     contigs: Counter,
     shifts: Sequence[Dict[str, Any]],
+    groups: Counter,
+    samples: Counter,
 ) -> List[str]:
     findings = []
     if fields:
@@ -733,6 +750,15 @@ def _findings(
                     f"{shift['label']} shifted: median {shift['first_median']:g} → "
                     f"{shift['second_median']:g}."
                 )
+    attribution = groups or samples
+    if attribution:
+        name, count = attribution.most_common(1)[0]
+        total = sum(attribution.values())
+        label = "read group" if groups else "sample"
+        findings.append(
+            f"Most attributed changes occur in {label} {name} "
+            f"({count / total:.0%} of attributed changes)."
+        )
     if contigs:
         contig, count = contigs.most_common(1)[0]
         total = sum(contigs.values())

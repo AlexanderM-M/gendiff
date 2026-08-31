@@ -230,6 +230,15 @@ def render_html(result: ComparisonResult) -> str:
     status = "Equivalent" if result.equivalent else "Different"
     status_class = "ok" if result.equivalent else "different"
     detail_sections: List[str] = []
+    header_section = ""
+    if result.header_differences:
+        items = "".join(
+            f"<li>{escape(value)}</li>" for value in result.header_differences
+        )
+        header_section = (
+            "<details open><summary>Header and reference diagnostics</summary>"
+            f"<section><ul>{items}</ul></section></details>"
+        )
     if details is not None:
         detail_sections.append(_findings(result))
         detail_sections.append(
@@ -274,6 +283,18 @@ def render_html(result: ComparisonResult) -> str:
                     (
                         (sample, f"{count:,}")
                         for sample, count in details.sample_changes.items()
+                    ),
+                )
+                + "</section></details>"
+            )
+        if details.group_changes:
+            detail_sections.append(
+                "<details><summary>Changes by read group</summary><section>"
+                + _table(
+                    ("Read group", "Changes"),
+                    (
+                        (group, f"{count:,}")
+                        for group, count in details.group_changes.items()
                     ),
                 )
                 + "</section></details>"
@@ -380,6 +401,7 @@ th{{background:#f6f8fa}}
 <h1>GenDiff</h1><div class="status {status_class}">{status}</div>
 <section><h2>Summary</h2><dl class="summary">
 <dt>Identity overlap</dt><dd>{result.identity_overlap:.1%}</dd>
+<dt>Content similarity</dt><dd>{result.content_similarity:.1%}</dd>
 <dt>{escape(result.left_label)}</dt>
 <dd>{result.left_records:,} records</dd>
 <dt>{escape(result.right_label)}</dt>
@@ -389,6 +411,7 @@ th{{background:#f6f8fa}}
 <dt>Metadata header</dt>
 <dd>{"same" if result.metadata_equal else "different"} (informational)</dd>
 </dl></section>
+{header_section}
 {"".join(detail_sections)}
 </main></body></html>
 """

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -10,12 +10,14 @@ from typing import Any, Dict, Optional, Sequence, Set, Tuple
 import pysam
 
 from gendiff.artifacts import output_workspace, sample_slugs, write_manifest
+from gendiff.cache import cache_key, load_entry, store_entry
 from gendiff.details import (
     DetailWriter,
     SelectionReader,
     analyze_details,
     relationship_label,
 )
+from gendiff.diagnostics import header_differences
 from gendiff.difference_table import publish_table
 from gendiff.fingerprint import (
     Fingerprint,
@@ -41,6 +43,7 @@ class _ScanResult:
     structural: Dict[str, Any]
     metadata: Dict[str, Any]
     sketch: Sketch
+    content_sketch: Sketch
     contig_counts: Dict[str, int]
     window_counts: Dict[Tuple[str, int], int]
     metric_counts: Dict[str, Dict[float, int]]
@@ -50,7 +53,20 @@ def _structural_header(header: pysam.VariantHeader) -> Dict[str, Any]:
     contigs = {
         name: {"length": header.contigs[name].length} for name in sorted(header.contigs)
     }
-    return {"contigs": contigs, "samples": sorted(header.samples)}
+    definitions = {}
+    for name, records in (
+        ("info", header.info),
+        ("formats", header.formats),
+        ("filters", header.filters),
+    ):
+        definitions[name] = {
+            key: {
+                "number": str(getattr(value, "number", "")),
+                "type": str(getattr(value, "type", "")),
+            }
+            for key, value in sorted(records.items())
+        }
+    return {"contigs": contigs, "samples": sorted(header.samples), **definitions}
 
 
 def _metadata_header(header: pysam.VariantHeader) -> Dict[str, Any]:
@@ -131,6 +147,7 @@ def _scan(
 ) -> _ScanResult:
     builders = {name: FingerprintBuilder() for name in ("record",) + tuple(fields)}
     sketch = SketchBuilder()
+    content_sketch = SketchBuilder()
     writer = DetailWriter(details_path) if details_path else None
     reporter = ProgressReporter(label, progress)
     ignored = set(ignore_info)
@@ -155,6 +172,7 @@ def _scan(
                     builders[name].add_digest(field_digest)
                 builders["record"].add_digest(record_digest)
                 sketch.add_digest(digest_native(identity))
+                content_sketch.add_digest(record_digest)
                 if writer:
                     writer.add(
                         identity,
@@ -177,6 +195,7 @@ def _scan(
         structural,
         metadata,
         sketch.finish(),
+        content_sketch.finish(),
         dict(contig_counts),
         dict(window_counts),
         {name: dict(values) for name, values in metric_counts.items()},
@@ -371,34 +390,144 @@ def compare_variants(
     track_dir: Optional[Path],
     difference_table: Optional[Path],
     region_filter: Optional[RegionFilter],
+    cache_dir: Optional[Path],
     force: bool,
 ) -> ComparisonResult:
     artifacts: Dict[str, str] = {}
     with TemporaryDirectory(prefix="gendiff-", dir=temp_dir) as work:
         workspace = Path(work)
         scan_left, scan_right = left, right
+        left_details = workspace / "left.sqlite" if explain else None
+        right_details = workspace / "right.sqlite" if explain else None
+        reference_setting = None
+        if reference:
+            stat = reference.stat()
+            reference_setting = [
+                str(reference.resolve()),
+                stat.st_size,
+                stat.st_mtime_ns,
+            ]
+        settings = {
+            "kind": "variant",
+            "reference": reference_setting,
+            "normalize": normalize_variants,
+            "fields": list(fields),
+            "ignore_info": list(ignore_info),
+            "regions": repr(region_filter),
+        }
+        left_key = cache_key(left, settings) if cache_dir else ""
+        right_key = cache_key(right, settings) if cache_dir else ""
+        cached_left = (
+            load_entry(cache_dir, left_key, left_details) if cache_dir else None
+        )
+        cached_right = (
+            load_entry(cache_dir, right_key, right_details) if cache_dir else None
+        )
         if normalize_variants:
             if reference is None:
                 raise ValueError("--normalize requires --reference")
-            scan_left = workspace / "left.normalized.bcf"
-            scan_right = workspace / "right.normalized.bcf"
-            _normalize(left, scan_left, reference)
-            _normalize(right, scan_right, reference)
-        left_details = workspace / "left.sqlite" if explain else None
-        right_details = workspace / "right.sqlite" if explain else None
-        left_scan, right_scan = _scan_pair(
-            scan_left,
-            scan_right,
-            threads,
-            fields,
-            ignore_info,
-            left_details,
-            right_details,
-            progress,
-            left_label,
-            right_label,
-            region_filter,
-        )
+            if cached_left is None or diff_dir:
+                scan_left = workspace / "left.normalized.bcf"
+                _normalize(left, scan_left, reference)
+            if cached_right is None or diff_dir:
+                scan_right = workspace / "right.normalized.bcf"
+                _normalize(right, scan_right, reference)
+        left_scan = _ScanResult(**cached_left) if cached_left else None
+        right_scan = _ScanResult(**cached_right) if cached_right else None
+        stored_left = stored_right = False
+        if left_scan is None and right_scan is None and cache_dir:
+            input_threads = max(1, threads // 2)
+            arguments = (input_threads, fields, ignore_info)
+            if threads == 1:
+                left_scan = _scan(
+                    scan_left,
+                    *arguments,
+                    left_details,
+                    progress,
+                    left_label,
+                    region_filter,
+                )
+                store_entry(cache_dir, left_key, left_scan, left_details)
+                stored_left = True
+                right_scan = _scan(
+                    scan_right,
+                    *arguments,
+                    right_details,
+                    progress,
+                    right_label,
+                    region_filter,
+                )
+            else:
+                with ProcessPoolExecutor(max_workers=2) as executor:
+                    left_future = executor.submit(
+                        _scan,
+                        scan_left,
+                        *arguments,
+                        left_details,
+                        progress,
+                        left_label,
+                        region_filter,
+                    )
+                    right_future = executor.submit(
+                        _scan,
+                        scan_right,
+                        *arguments,
+                        right_details,
+                        progress,
+                        right_label,
+                        region_filter,
+                    )
+                    future_sides = {left_future: "left", right_future: "right"}
+                    for future in as_completed(future_sides):
+                        if future_sides[future] == "left":
+                            left_scan = future.result()
+                            store_entry(cache_dir, left_key, left_scan, left_details)
+                            stored_left = True
+                        else:
+                            right_scan = future.result()
+                            store_entry(cache_dir, right_key, right_scan, right_details)
+                            stored_right = True
+        elif left_scan is None and right_scan is None:
+            left_scan, right_scan = _scan_pair(
+                scan_left,
+                scan_right,
+                threads,
+                fields,
+                ignore_info,
+                left_details,
+                right_details,
+                progress,
+                left_label,
+                right_label,
+                region_filter,
+            )
+        elif left_scan is None:
+            left_scan = _scan(
+                scan_left,
+                threads,
+                fields,
+                ignore_info,
+                left_details,
+                progress,
+                left_label,
+                region_filter,
+            )
+        elif right_scan is None:
+            right_scan = _scan(
+                scan_right,
+                threads,
+                fields,
+                ignore_info,
+                right_details,
+                progress,
+                right_label,
+                region_filter,
+            )
+        if cache_dir:
+            if cached_left is None and not stored_left:
+                store_entry(cache_dir, left_key, left_scan, left_details)
+            if cached_right is None and not stored_right:
+                store_entry(cache_dir, right_key, right_scan, right_details)
         changed = [
             name
             for name in fields
@@ -408,6 +537,13 @@ def compare_variants(
             left_scan.fingerprints["record"] == right_scan.fingerprints["record"]
         )
         overlap = sketch_containment(left_scan.sketch, right_scan.sketch)
+        content_similarity = sketch_containment(
+            left_scan.content_sketch, right_scan.content_sketch
+        )
+        if left_scan.count or right_scan.count:
+            content_similarity *= min(left_scan.count, right_scan.count) / max(
+                left_scan.count, right_scan.count
+            )
         selection_path = workspace / "selections.sqlite" if diff_dir else None
         track_path = workspace / "tracks.sqlite" if track_dir else None
         table_path = (
@@ -488,7 +624,19 @@ def compare_variants(
             overlap, content_equal, left_scan.count == right_scan.count == 0
         ),
         identity_overlap=overlap,
+        content_similarity=content_similarity,
         profile=profile,
         details=details,
         artifacts=artifacts,
+        header_differences=header_differences(
+            "variant", left_scan.structural, right_scan.structural
+        ),
+        cache=(
+            {
+                "first": "hit" if cached_left else "miss",
+                "second": "hit" if cached_right else "miss",
+            }
+            if cache_dir
+            else {}
+        ),
     )

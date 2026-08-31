@@ -21,6 +21,7 @@ class DifferenceDetails:
     contig_stats: List[Dict[str, Any]] = field(default_factory=list)
     distribution_shifts: List[Dict[str, Any]] = field(default_factory=list)
     findings: List[str] = field(default_factory=list)
+    group_changes: Dict[str, int] = field(default_factory=dict)
 
     def to_dict(self, left_label: str, right_label: str) -> Dict[str, Any]:
         statuses = {
@@ -63,6 +64,7 @@ class DifferenceDetails:
             "contig_stats": self.contig_stats,
             "distribution_shifts": self.distribution_shifts,
             "findings": self.findings,
+            "group_changes": self.group_changes,
             "sample_changes": self.sample_changes,
             "examples": examples,
         }
@@ -83,9 +85,12 @@ class ComparisonResult:
     changed_fields: List[str]
     relationship: str = "unknown"
     identity_overlap: float = 0.0
+    content_similarity: float = 0.0
     profile: str = "strict"
     details: Optional[DifferenceDetails] = None
     artifacts: Dict[str, str] = field(default_factory=dict)
+    header_differences: List[str] = field(default_factory=list)
+    cache: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def equivalent(self) -> bool:
@@ -113,10 +118,14 @@ class ComparisonResult:
             "changed_fields": self.changed_fields,
             "relationship": self.relationship,
             "identity_overlap": self.identity_overlap,
+            "content_similarity": self.content_similarity,
             "profile": self.profile,
+            "header_differences": self.header_differences,
         }
         if self.details is not None:
             result["details"] = self.details.to_dict(self.left_label, self.right_label)
         if self.artifacts:
             result["artifacts"] = self.artifacts
+        if self.cache:
+            result["cache"] = self.cache
         return result

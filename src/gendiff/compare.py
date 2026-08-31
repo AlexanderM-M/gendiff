@@ -95,6 +95,7 @@ def compare_files(
     regions: Sequence[str] = (),
     regions_file: Optional[Path] = None,
     exclude_regions: Optional[Path] = None,
+    cache_dir: Optional[Path] = None,
     force: bool = False,
 ) -> ComparisonResult:
     if threads < 1:
@@ -108,6 +109,8 @@ def compare_files(
         raise GenDiffError("max examples must be at least 0")
     if temp_dir is not None and not temp_dir.is_dir():
         raise GenDiffError(f"temporary directory not found: {temp_dir}")
+    if cache_dir is not None and cache_dir.exists() and not cache_dir.is_dir():
+        raise GenDiffError(f"cache path is not a directory: {cache_dir}")
     for path, label in (
         (regions_file, "regions file"),
         (exclude_regions, "excluded regions file"),
@@ -167,6 +170,7 @@ def compare_files(
             track_dir,
             difference_table,
             region_filter,
+            cache_dir,
             force,
         )
     if ignore_tags:
@@ -198,5 +202,6 @@ def compare_files(
         track_dir,
         difference_table,
         region_filter,
+        cache_dir,
         force,
     )

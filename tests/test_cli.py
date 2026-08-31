@@ -157,3 +157,33 @@ def test_svg_uses_inferred_and_custom_sample_names(capsys, tmp_path: Path) -> No
     assert [item["label"] for item in result["inputs"]] == ["Control", "Treated"]
     assert result["details"]["records"]["only_in_first"]["label"] == "Control"
     assert result["details"]["examples"][0]["first"]["label"] == "Control"
+
+
+def test_reproducibility_manifest_contains_checksums(tmp_path: Path) -> None:
+    vcf = tmp_path / "empty.vcf"
+    manifest = tmp_path / "reproducibility.json"
+    vcf.write_text(
+        "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+    )
+
+    status = main([str(vcf), str(vcf), "--reproducibility", str(manifest)])
+    payload = json.loads(manifest.read_text())
+
+    assert status == 0
+    assert payload["gendiff_reproducibility_format"] == 1
+    assert len(payload["inputs"][0]["sha256"]) == 64
+    assert payload["comparison"]["equivalent"] is True
+
+
+def test_matrix_subcommand_writes_report(tmp_path: Path) -> None:
+    first = tmp_path / "first.vcf"
+    second = tmp_path / "second.vcf"
+    report = tmp_path / "matrix.html"
+    content = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+    first.write_text(content)
+    second.write_text(content)
+
+    status = main(["matrix", str(first), str(second), "--html", str(report)])
+
+    assert status == 0
+    assert "semantic content similarity" in report.read_text()

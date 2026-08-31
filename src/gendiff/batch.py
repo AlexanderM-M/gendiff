@@ -213,6 +213,7 @@ def _compare_entry(
     diff_dir: Optional[Path],
     track_dir: Optional[Path],
     policy_document: Optional[PolicyDocument],
+    cache_dir: Optional[Path],
 ) -> BatchItem:
     started = time.perf_counter()
     try:
@@ -233,6 +234,7 @@ def _compare_entry(
             right_label=f"{entry.sample} candidate",
             diff_dir=diff_dir,
             track_dir=track_dir,
+            cache_dir=cache_dir,
         )
     except (GenDiffError, OSError, ValueError) as error:
         raise BatchError(f"{entry.sample} / {entry.stage}: {error}") from error
@@ -270,6 +272,7 @@ def _run_entries(
     diff_workspace: Optional[Path],
     track_workspace: Optional[Path],
     policy_document: Optional[PolicyDocument],
+    cache_dir: Optional[Path],
 ) -> Tuple[BatchItem, ...]:
     def output_for(workspace: Optional[Path], entry: BatchEntry) -> Optional[Path]:
         output = None
@@ -296,6 +299,7 @@ def _run_entries(
                 output_for(diff_workspace, entry),
                 output_for(track_workspace, entry),
                 policy_document,
+                cache_dir,
             ),
         )
     workers = min(len(entries), threads)
@@ -313,6 +317,7 @@ def _run_entries(
                 output_for(diff_workspace, entry),
                 output_for(track_workspace, entry),
                 policy_document,
+                cache_dir,
             )
             for entry in entries
         )
@@ -331,6 +336,7 @@ def _run_entries(
                 output_for(diff_workspace, entry),
                 output_for(track_workspace, entry),
                 policy_document,
+                cache_dir,
             )
             for entry in entries
         ]
@@ -379,6 +385,7 @@ def compare_manifest(
     policy: BatchPolicy,
     policy_document: Optional[PolicyDocument] = None,
     track_dir: Optional[Path] = None,
+    cache_dir: Optional[Path] = None,
 ) -> BatchResult:
     entries = read_manifest(manifest, profile, reference, normalize_variants)
     if diff_dir is None and track_dir is None:
@@ -394,6 +401,7 @@ def compare_manifest(
             None,
             None,
             policy_document,
+            cache_dir,
         )
         return BatchResult(
             manifest=manifest,
@@ -424,6 +432,7 @@ def compare_manifest(
             diff_workspace,
             track_workspace,
             policy_document,
+            cache_dir,
         )
         if diff_workspace is not None and diff_dir is not None:
             items = _published_items(items, diff_workspace, diff_dir)

@@ -3,6 +3,8 @@ from pathlib import Path
 import pysam
 
 from gendiff.compare import compare_files
+from gendiff.identity import compare_identity
+from gendiff.matrix import compare_matrix
 
 
 def _write_vcf(
@@ -12,11 +14,12 @@ def _write_vcf(
     source="caller",
     quality=60,
     depth=20,
+    contig_length=1000,
 ) -> None:
     header = pysam.VariantHeader()
     header.add_meta("fileformat", value="VCFv4.3")
     header.add_meta("source", value=source)
-    header.contigs.add("chr1", length=1000)
+    header.contigs.add("chr1", length=contig_length)
     header.formats.add("GT", 1, "String", "Genotype")
     header.info.add("DP", 1, "Integer", "Depth")
     header.add_sample("sample")
@@ -142,3 +145,44 @@ def test_reference_normalization_equates_indel_representations(tmp_path: Path) -
     )
 
     assert normalized.equivalent
+
+
+def test_header_diagnostics_explain_reference_mismatch(tmp_path: Path) -> None:
+    left = tmp_path / "left.vcf"
+    right = tmp_path / "right.vcf"
+    _write_vcf(left, [10], contig_length=1000)
+    _write_vcf(right, [10], contig_length=2000)
+
+    result = compare_files(left, right)
+
+    assert not result.structure_equal
+    assert result.header_differences[0].startswith("Reference compatibility warning")
+    assert "Contig lengths differ: chr1" in result.header_differences
+
+
+def test_identity_and_semantic_matrix_detect_mismatch(tmp_path: Path) -> None:
+    first = tmp_path / "first.vcf"
+    same = tmp_path / "same.vcf"
+    different = tmp_path / "different.vcf"
+    positions = range(1, 31)
+    _write_vcf(first, positions, genotype=(0, 1))
+    _write_vcf(same, positions, genotype=(0, 1))
+    _write_vcf(different, positions, genotype=(1, 1))
+
+    identity = compare_identity(first, same, sites=None, reference=None, min_depth=5)
+    matrix = compare_matrix(
+        [first, same, different],
+        threads=2,
+        profile="strict",
+        reference=None,
+        normalize_variants=False,
+        ignore_tags=(),
+        ignore_info=(),
+        cache_dir=tmp_path / "cache",
+    )
+
+    assert identity.passed
+    assert identity.best_matches[0].concordance == 1.0
+    assert matrix.values[0][1] == 1.0
+    assert matrix.values[0][2] == 0.0
+    assert matrix.outliers == (2,)

@@ -15,12 +15,15 @@ def _write_bam(
     tag_offset: int = 0,
     sort_order: str = "unsorted",
     include_unmapped: bool = False,
+    read_group: str = "",
 ) -> None:
     header = {
         "HD": {"VN": "1.6", "SO": sort_order},
         "SQ": [{"SN": "chr1", "LN": 1000}],
         "PG": [{"ID": program, "PN": program}],
     }
+    if read_group:
+        header["RG"] = [{"ID": read_group, "SM": "sample"}]
     with pysam.AlignmentFile(path, "wb", header=header) as output:
         for index, mapq in records:
             record = pysam.AlignedSegment(output.header)
@@ -33,6 +36,8 @@ def _write_bam(
             record.cigarstring = "4M"
             record.query_qualities = pysam.qualitystring_to_array("IIII")
             record.set_tag("NM", index + tag_offset)
+            if read_group:
+                record.set_tag("RG", read_group)
             output.write(record)
         if include_unmapped:
             record = pysam.AlignedSegment(output.header)
@@ -202,3 +207,19 @@ def test_indexed_detailed_matching_uses_shards(tmp_path: Path) -> None:
 
     assert result.details is not None
     assert result.details.modified == 1
+
+
+def test_cache_reuses_detailed_scans_and_attributes_read_groups(tmp_path: Path) -> None:
+    left = tmp_path / "left.bam"
+    right = tmp_path / "right.bam"
+    cache = tmp_path / "cache"
+    _write_bam(left, [(0, 20)], "tool", read_group="lane-a")
+    _write_bam(right, [(0, 40)], "tool", read_group="lane-a")
+
+    first = compare_files(left, right, explain=True, cache_dir=cache)
+    second = compare_files(left, right, explain=True, cache_dir=cache)
+
+    assert first.cache == {"first": "miss", "second": "miss"}
+    assert second.cache == {"first": "hit", "second": "hit"}
+    assert second.details is not None
+    assert second.details.group_changes == {"lane-a": 1}
