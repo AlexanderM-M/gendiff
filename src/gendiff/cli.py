@@ -125,6 +125,25 @@ def _single_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="write BED, bedGraph, and per-contig difference tracks",
     )
+    parser.add_argument(
+        "--difference-table",
+        type=Path,
+        metavar="FILE",
+        help="write every difference as TSV or TSV.GZ",
+    )
+    parser.add_argument(
+        "--region",
+        action="append",
+        default=[],
+        metavar="CONTIG:START-END",
+        help="compare only this region; repeat as needed",
+    )
+    parser.add_argument(
+        "--regions", type=Path, metavar="BED", help="compare only BED regions"
+    )
+    parser.add_argument(
+        "--exclude-regions", type=Path, metavar="BED", help="exclude BED regions"
+    )
     parser.add_argument("--force", action="store_true", help="replace outputs")
     parser.add_argument("--json", action="store_true", help="write JSON output")
     parser.add_argument(
@@ -358,7 +377,11 @@ def _render(result: ComparisonResult) -> str:
 def _single_main(argv: List[str]) -> int:
     args = _single_parser().parse_args(argv)
     try:
-        outputs = [output for output in (args.html, args.svg, args.igv_batch) if output]
+        outputs = [
+            output
+            for output in (args.html, args.svg, args.igv_batch, args.difference_table)
+            if output
+        ]
         for output in outputs:
             if output and output.exists() and not args.force:
                 raise FileExistsError(
@@ -384,6 +407,7 @@ def _single_main(argv: List[str]) -> int:
                 args.igv_batch,
                 args.write_diff is not None,
                 args.tracks is not None,
+                args.difference_table is not None,
             )
         )
         result = compare_files(
@@ -403,6 +427,10 @@ def _single_main(argv: List[str]) -> int:
             right_label=args.name_b,
             diff_dir=args.write_diff,
             track_dir=args.tracks,
+            difference_table=args.difference_table,
+            regions=args.region,
+            regions_file=args.regions,
+            exclude_regions=args.exclude_regions,
             force=args.force,
         )
         html_report = render_html(result) if args.html else None
@@ -425,6 +453,8 @@ def _single_main(argv: List[str]) -> int:
             print(f"Wrote {args.write_diff}", file=sys.stderr)
         if args.tracks:
             print(f"Wrote {args.tracks}", file=sys.stderr)
+        if args.difference_table:
+            print(f"Wrote {args.difference_table}", file=sys.stderr)
     except (GenDiffError, OSError, ValueError) as error:
         print(f"gendiff: error: {error}", file=sys.stderr)
         return 2

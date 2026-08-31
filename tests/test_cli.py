@@ -132,7 +132,7 @@ def test_svg_uses_inferred_and_custom_sample_names(capsys, tmp_path: Path) -> No
     assert "strict profile" not in svg
     assert "sample-a.merged.vcf" not in svg
     assert "sample-b.merged.vcf" not in svg
-    assert 'x="1040"' in svg
+    assert 'y="286" width="920"' in svg
     assert 'x="882"' not in svg
 
     status = main(

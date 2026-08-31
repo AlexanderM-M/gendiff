@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from collections import Counter
 from html import escape
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -43,6 +45,105 @@ def _example_status(status: str, result: ComparisonResult) -> str:
     }.get(status, status.replace("_", " ").title())
 
 
+def _composition(result: ComparisonResult) -> str:
+    details = result.details
+    if details is None:
+        return ""
+    values = (
+        ("Identical", details.identical, "#1a7f37"),
+        ("Modified", details.modified, "#bf8700"),
+        (f"Only in {result.left_label}", details.left_only, "#0969da"),
+        (f"Only in {result.right_label}", details.right_only, "#8250df"),
+    )
+    total = sum(value for _, value, _ in values) or 1
+    segments = "".join(
+        f"<i style='width:{value * 100 / total:.3f}%;background:{color}' "
+        f"title='{escape(name)}: {value:,}'></i>"
+        for name, value, color in values
+        if value
+    )
+    legend = "".join(
+        f"<span><b style='background:{color}'></b>{escape(name)} "
+        f"<strong>{value:,}</strong></span>"
+        for name, value, color in values
+    )
+    return (
+        f"<div class='composition'>{segments}</div><div class='legend'>{legend}</div>"
+    )
+
+
+def _genome_map(result: ComparisonResult) -> str:
+    details = result.details
+    if details is None or not details.contig_stats:
+        return ""
+    density = {}
+    for item in details.region_density:
+        density.setdefault(item["contig"], []).append(item)
+    maximum = max((item["changes"] for item in details.region_density), default=1)
+    rows = []
+    for stat in details.contig_stats[:12]:
+        contig = str(stat["contig"])
+        length = int(
+            stat["length"]
+            or max((x["end"] for x in density.get(contig, [])), default=1)
+        )
+        cells = "".join(
+            f"<i style='left:{100 * item['start'] / length:.3f}%;"
+            f"width:{max(0.35, 100 * (item['end'] - item['start']) / length):.3f}%;"
+            f"opacity:{0.18 + 0.82 * item['changes'] / maximum:.3f}' "
+            f"title='{escape(contig)}:{item['start'] + 1:,} — "
+            f"{item['changes']:,} changes'></i>"
+            for item in density.get(contig, [])
+        )
+        rows.append(
+            f"<div class='genome-row'><strong>{escape(contig)}</strong>"
+            f"<div class='genome-track'>{cells}</div>"
+            f"<span>{stat['changes']:,}</span></div>"
+        )
+    return (
+        "<section><h2>Differences across the genome</h2>" + "".join(rows) + "</section>"
+    )
+
+
+def _transition_matrix(result: ComparisonResult) -> str:
+    details = result.details
+    if details is None:
+        return ""
+    patterns = (
+        ("Genotype transitions", re.compile(r"^genotype .*?: (.+) → (.+)$")),
+        ("MAPQ transitions", re.compile(r"^MAPQ: (.+) → (.+)$")),
+    )
+    for title, pattern in patterns:
+        pairs = Counter()
+        for transition, count in details.transitions.items():
+            match = pattern.match(transition)
+            if match:
+                pairs[match.groups()] += count
+        if not pairs:
+            continue
+        state_counts = Counter()
+        for (first, second), count in pairs.items():
+            state_counts[first] += count
+            state_counts[second] += count
+        states = [value for value, _ in state_counts.most_common(8)]
+        maximum = max(pairs.values())
+        header = "".join(f"<th>{escape(value)}</th>" for value in states)
+        rows = []
+        for first in states:
+            cells = "".join(
+                f"<td class='heat' style='--heat:"
+                f"{pairs[(first, second)] / maximum:.3f}'>"
+                f"{pairs[(first, second)] or ''}</td>"
+                for second in states
+            )
+            rows.append(f"<tr><th>{escape(first)}</th>{cells}</tr>")
+        return (
+            f"<section><h2>{title}</h2><table class='matrix'><tr>"
+            f"<th>From ↓ / to →</th>{header}</tr>{''.join(rows)}</table></section>"
+        )
+    return ""
+
+
 def render_html(result: ComparisonResult) -> str:
     details = result.details
     status = "Equivalent" if result.equivalent else "Different"
@@ -50,24 +151,17 @@ def render_html(result: ComparisonResult) -> str:
     detail_sections: List[str] = []
     if details is not None:
         detail_sections.append(
-            "<section><h2>Record comparison</h2><div class='cards'>"
-            f"<article><strong>{details.identical:,}</strong>"
-            "<span>Identical</span></article>"
-            f"<article><strong>{details.modified:,}</strong>"
-            "<span>Modified</span></article>"
-            f"<article><strong>{details.left_only:,}</strong>"
-            f"<span>Only in {escape(result.left_label)}</span></article>"
-            f"<article><strong>{details.right_only:,}</strong>"
-            f"<span>Only in {escape(result.right_label)}</span></article>"
-            "</div></section>"
+            "<section><h2>Record comparison</h2>" + _composition(result) + "</section>"
         )
+        detail_sections.append(_genome_map(result))
+        detail_sections.append(_transition_matrix(result))
         detail_sections.append(
             "<section><h2>Changed fields</h2>"
             f"{_bar_rows(details.field_changes)}</section>"
         )
         if details.transitions:
             detail_sections.append(
-                "<section><h2>Change transitions</h2>"
+                "<details><summary>Change transitions</summary><section>"
                 + _table(
                     ("Transition", "Records"),
                     (
@@ -75,11 +169,11 @@ def render_html(result: ComparisonResult) -> str:
                         for transition, count in list(details.transitions.items())[:50]
                     ),
                 )
-                + "</section>"
+                + "</section></details>"
             )
         if details.top_regions:
             detail_sections.append(
-                "<section><h2>Most affected regions</h2>"
+                "<details><summary>Most affected regions</summary><section>"
                 + _table(
                     ("Region", "Changes"),
                     (
@@ -87,7 +181,7 @@ def render_html(result: ComparisonResult) -> str:
                         for item in details.top_regions
                     ),
                 )
-                + "</section>"
+                + "</section></details>"
             )
         if details.sample_changes:
             detail_sections.append(
@@ -103,7 +197,7 @@ def render_html(result: ComparisonResult) -> str:
             )
         if details.examples:
             detail_sections.append(
-                "<section><h2>Examples</h2>"
+                "<details><summary>Record examples</summary><section>"
                 + _table(
                     (
                         "Status",
@@ -127,7 +221,7 @@ def render_html(result: ComparisonResult) -> str:
                         for item in details.examples
                     ),
                 )
-                + "</section>"
+                + "</section></details>"
             )
 
     return f"""<!doctype html>
@@ -151,6 +245,20 @@ padding:20px;margin-top:16px;overflow:auto}}.status{{font-size:20px;font-weight:
 .cards{{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:12px}}
 .cards article{{border:1px solid var(--line);border-radius:6px;padding:14px}}
 .cards strong{{display:block;font-size:22px}}.cards span{{color:var(--muted)}}
+.composition{{display:flex;height:28px;border-radius:7px;overflow:hidden;
+background:#eaeef2}}.composition i{{display:block;min-width:2px}}
+.legend{{display:flex;flex-wrap:wrap;gap:14px;margin-top:12px}}
+.legend span{{color:var(--muted)}}.legend b{{display:inline-block;width:10px;
+height:10px;border-radius:2px;margin-right:6px}}
+.legend strong{{color:var(--text);margin-left:3px}}
+.genome-row{{display:grid;grid-template-columns:110px 1fr 70px;gap:12px;
+align-items:center;margin:8px 0}}.genome-row span{{text-align:right}}
+.genome-track{{height:14px;background:#eaeef2;border-radius:4px;
+position:relative;overflow:hidden}}.genome-track i{{position:absolute;height:100%;
+background:var(--bad)}}details{{margin-top:16px}}
+summary{{cursor:pointer;font-weight:700;font-size:16px}}
+.heat{{text-align:center;background:rgba(207,34,46,var(--heat))}}
+.matrix th{{text-align:center}}
 .bar-row{{display:grid;grid-template-columns:150px 1fr 80px;gap:12px;
 align-items:center;margin:9px 0}}
 .bar{{height:10px;background:#eaeef2;border-radius:5px;overflow:hidden}}
@@ -201,28 +309,33 @@ def render_svg(result: ComparisonResult) -> str:
         transition_values
         or list((details.field_changes if details else {}).items())[:8]
     )
-    height = 460 if not field_values else 494 + len(field_values) * 36
+    height = 420 if not field_values else 444 + len(field_values) * 36
     status = "Equivalent" if result.equivalent else "Different"
     status_color = "#1a7f37" if result.equivalent else "#cf222e"
     overlap_width = 920 * max(0.0, min(1.0, result.identity_overlap))
-    record_maximum = max((value for _, value, _ in record_values), default=1) or 1
     field_maximum = max((value for _, value in field_values), default=1) or 1
 
     record_rows = []
+    total_records = sum(value for _, value, _ in record_values) or 1
+    offset = 48.0
     for index, (name, value, color) in enumerate(record_values):
-        y = 300 + index * 38
-        width = 550 * value / record_maximum
+        width = 920 * value / total_records
+        if value:
+            record_rows.append(
+                f'<rect x="{offset:.1f}" y="286" width="{width:.1f}" '
+                f'height="24" fill="{color}"/>'
+            )
+        offset += width
+        x = 54 + (index % 2) * 510
+        y = 342 + (index // 2) * 28
         record_rows.append(
-            f'<text x="54" y="{y}" class="label">{escape(_short(name))}</text>'
-            f'<rect x="310" y="{y - 15}" width="550" height="16" rx="4" '
-            'fill="#eaeef2"/>'
-            f'<rect x="310" y="{y - 15}" width="{width:.1f}" height="16" '
-            f'rx="4" fill="{color}"/>'
-            f'<text x="1040" y="{y}" class="value">{value:,}</text>'
+            f'<rect x="{x}" y="{y - 11}" width="10" height="10" rx="2" '
+            f'fill="{color}"/><text x="{x + 18}" y="{y}" class="label">'
+            f"{escape(_short(name))}: {value:,}</text>"
         )
 
     field_rows = []
-    field_start = 480
+    field_start = 430
     for index, (name, value) in enumerate(field_values):
         y = field_start + index * 36
         width = 550 * value / field_maximum
@@ -239,7 +352,7 @@ def render_svg(result: ComparisonResult) -> str:
     if field_rows:
         section_title = "Top transitions" if transition_values else "Changed fields"
         field_section = (
-            f'<text x="40" y="447" class="section">{section_title}</text>'
+            f'<text x="40" y="402" class="section">{section_title}</text>'
             + "".join(field_rows)
         )
     title_text = escape(
@@ -286,7 +399,8 @@ text{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#1
 <rect x="48" y="220" width="920" height="18" rx="6" fill="#eaeef2"/>
 <rect x="48" y="220" width="{overlap_width:.1f}" height="18" rx="6" fill="#0969da"/>
 <text x="1048" y="235" class="value">{result.identity_overlap:.1%}</text>
-<text x="40" y="270" class="section">Record comparison</text>
+<text x="48" y="270" class="section">Record comparison</text>
+<rect x="48" y="286" width="920" height="24" rx="6" fill="#eaeef2"/>
 {record_section}
 {field_section}
 </svg>

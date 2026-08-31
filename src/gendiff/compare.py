@@ -6,6 +6,7 @@ from typing import Optional, Sequence
 from gendiff.alignment import compare_alignments
 from gendiff.model import ComparisonResult
 from gendiff.profiles import fields_for
+from gendiff.regions import load_region_filter
 from gendiff.variant import compare_variants
 
 
@@ -90,6 +91,10 @@ def compare_files(
     right_label: Optional[str] = None,
     diff_dir: Optional[Path] = None,
     track_dir: Optional[Path] = None,
+    difference_table: Optional[Path] = None,
+    regions: Sequence[str] = (),
+    regions_file: Optional[Path] = None,
+    exclude_regions: Optional[Path] = None,
     force: bool = False,
 ) -> ComparisonResult:
     if threads < 1:
@@ -103,6 +108,16 @@ def compare_files(
         raise GenDiffError("max examples must be at least 0")
     if temp_dir is not None and not temp_dir.is_dir():
         raise GenDiffError(f"temporary directory not found: {temp_dir}")
+    for path, label in (
+        (regions_file, "regions file"),
+        (exclude_regions, "excluded regions file"),
+    ):
+        if path is not None and not path.is_file():
+            raise GenDiffError(f"{label} not found: {path}")
+    try:
+        region_filter = load_region_filter(regions, regions_file, exclude_regions)
+    except (OSError, ValueError) as error:
+        raise GenDiffError(str(error)) from error
     if diff_dir is not None:
         explain = True
         resolved_diff = diff_dir.absolute()
@@ -115,6 +130,10 @@ def compare_files(
             raise GenDiffError("track output directory cannot be an input file")
         if diff_dir is not None and resolved_tracks == diff_dir.absolute():
             raise GenDiffError("diff and track output directories must differ")
+    if difference_table is not None:
+        explain = True
+        if difference_table.absolute() in {left.absolute(), right.absolute()}:
+            raise GenDiffError("difference table cannot be an input file")
     labels = _input_labels(left, right, left_label, right_label)
 
     left_kind = _kind(left)
@@ -146,6 +165,8 @@ def compare_files(
             temp_dir,
             diff_dir,
             track_dir,
+            difference_table,
+            region_filter,
             force,
         )
     if ignore_tags:
@@ -175,5 +196,7 @@ def compare_files(
         temp_dir,
         diff_dir,
         track_dir,
+        difference_table,
+        region_filter,
         force,
     )

@@ -1,3 +1,4 @@
+import gzip
 from pathlib import Path
 
 import pysam
@@ -160,3 +161,40 @@ def test_indexed_sharding_preserves_results(tmp_path: Path) -> None:
 
     assert sharded.left_records == 3
     assert sequential == sharded
+
+
+def test_region_filter_and_compressed_difference_table(tmp_path: Path) -> None:
+    left = tmp_path / "left.bam"
+    right = tmp_path / "right.bam"
+    table = tmp_path / "differences.tsv.gz"
+    _write_bam(left, [(0, 20), (1, 30)], "tool")
+    _write_bam(right, [(0, 20), (1, 40)], "tool")
+
+    result = compare_files(
+        left,
+        right,
+        regions=("chr1:12-12",),
+        difference_table=table,
+    )
+
+    assert result.details is not None
+    assert result.details.modified == 1
+    assert result.details.contig_stats[0]["contig"] == "chr1"
+    with gzip.open(table, "rt", encoding="utf-8") as handle:
+        content = handle.read()
+    assert "mapping_quality" in content
+    assert result.artifacts["difference_table"] == str(table.absolute())
+
+
+def test_indexed_detailed_matching_uses_shards(tmp_path: Path) -> None:
+    left = tmp_path / "left.bam"
+    right = tmp_path / "right.bam"
+    _write_bam(left, [(0, 20), (1, 30)], "tool", sort_order="coordinate")
+    _write_bam(right, [(0, 20), (1, 40)], "tool", sort_order="coordinate")
+    pysam.index(str(left))
+    pysam.index(str(right))
+
+    result = compare_files(left, right, threads=4, explain=True)
+
+    assert result.details is not None
+    assert result.details.modified == 1

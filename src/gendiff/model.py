@@ -17,6 +17,8 @@ class DifferenceDetails:
     sample_changes: Dict[str, int] = field(default_factory=dict)
     examples: List[Dict[str, Any]] = field(default_factory=list)
     loci: List[str] = field(default_factory=list)
+    region_density: List[Dict[str, Any]] = field(default_factory=list)
+    contig_stats: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self, left_label: str, right_label: str) -> Dict[str, Any]:
         statuses = {
@@ -55,6 +57,8 @@ class DifferenceDetails:
             "field_changes": self.field_changes,
             "transitions": self.transitions,
             "top_regions": self.top_regions,
+            "region_density": self.region_density,
+            "contig_stats": self.contig_stats,
             "sample_changes": self.sample_changes,
             "examples": examples,
         }

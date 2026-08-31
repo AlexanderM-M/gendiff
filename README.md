@@ -56,6 +56,9 @@ gendiff old.bam new.bam --html comparison.html
 gendiff old.bam new.bam --svg comparison.svg
 gendiff old.bam new.bam --write-diff diff-records
 gendiff old.bam new.bam --tracks genomic-tracks
+gendiff old.bam new.bam --difference-table differences.tsv.gz
+gendiff old.bam new.bam --region chr1:100000-200000
+gendiff old.bam new.bam --regions targets.bed --exclude-regions blacklist.bed
 gendiff old.bam new.bam --reference reference.fa --igv-batch differences.igv.batch
 gendiff old.bam new.bam --threads 8 --progress
 gendiff old.vcf.gz new.bcf --json
@@ -77,8 +80,14 @@ Input names are inferred from filenames and can be overridden with `--name-a` an
 The default fingerprint pass uses bounded memory. `--explain` performs disk-backed
 record matching and reports both changed fields and transitions such as MAPQ,
 mapping status, flags, filters, and genotypes. Use `--temp-dir` to select scratch
-storage. Indexed alignment files can be divided by contig when more than two
-threads are requested. Other inputs still scan both files concurrently.
+storage. With indexed alignment files, both scanning and detailed matching are
+divided by contig when more than two threads are requested.
+
+Limit a comparison with repeatable `--region` values or a BED file passed to
+`--regions`; `--exclude-regions` removes unwanted intervals. Coordinates passed
+to `--region` are one-based and inclusive, while BED coordinates follow the BED
+standard. `--difference-table` writes every modified or sample-only record as a
+streamed TSV ledger; use a `.gz` suffix for compression.
 
 `--write-diff DIR` writes four ordinary BAM or VCF files: records found only in
 each input and the before/after versions of modified records. A small manifest
@@ -90,9 +99,11 @@ density, and a per-contig TSV. These files work directly with IGV, bedtools, and
 other genome browsers.
 
 Reference-aware VCF normalization follows bcftools semantics and requires an
-indexed FASTA. HTML reports are self-contained, while SVG summaries can be used
-directly in documents and presentations. IGV output is a batch file that loads
-both inputs and visits example changed loci.
+indexed FASTA. HTML reports are self-contained and lead with a proportional
+record overview, a genome-wide difference map, and a MAPQ or genotype transition
+matrix when applicable. Detailed tables stay collapsed. SVG summaries can be
+used directly in documents and presentations. IGV output is a batch file that
+loads both inputs and visits example changed loci.
 
 ## Pipeline regression
 

@@ -16,6 +16,7 @@ from gendiff.details import (
     analyze_details,
     relationship_label,
 )
+from gendiff.difference_table import publish_table
 from gendiff.fingerprint import (
     Fingerprint,
     FingerprintBuilder,
@@ -28,6 +29,7 @@ from gendiff.fingerprint import (
 )
 from gendiff.model import ComparisonResult
 from gendiff.progress import ProgressReporter
+from gendiff.regions import RegionFilter
 from gendiff.tracks import contig_lengths, write_tracks
 
 
@@ -38,6 +40,7 @@ class _ScanResult:
     structural: Dict[str, Any]
     metadata: Dict[str, Any]
     sketch: Sketch
+    contig_counts: Dict[str, int]
 
 
 def _structural_header(header: pysam.VariantHeader) -> Dict[str, Any]:
@@ -121,6 +124,7 @@ def _scan(
     details_path: Optional[Path],
     progress: bool,
     label: str,
+    region_filter: Optional[RegionFilter] = None,
 ) -> _ScanResult:
     builders = {name: FingerprintBuilder() for name in ("record",) + tuple(fields)}
     sketch = SketchBuilder()
@@ -128,11 +132,16 @@ def _scan(
     reporter = ProgressReporter(label, progress)
     ignored = set(ignore_info)
     count = 0
+    contig_counts = Counter()
     try:
         with pysam.VariantFile(str(path), threads=threads) as handle:
             structural = _structural_header(handle.header)
             metadata = _metadata_header(handle.header)
             for record in handle:
+                if region_filter and not region_filter.allows(
+                    record.contig, record.start, record.stop
+                ):
+                    continue
                 identity = _identity(record)
                 values = _record_values(record, ignored)
                 field_digests, record_digest = _record_digests(values, fields)
@@ -148,13 +157,16 @@ def _scan(
                         _record_summary(record, values),
                     )
                 count += 1
+                contig_counts[record.contig] += 1
                 reporter.update(count)
     finally:
         if writer:
             writer.close()
         reporter.finish(count)
     fingerprints = {name: builder.finish() for name, builder in builders.items()}
-    return _ScanResult(fingerprints, count, structural, metadata, sketch.finish())
+    return _ScanResult(
+        fingerprints, count, structural, metadata, sketch.finish(), dict(contig_counts)
+    )
 
 
 def _scan_pair(
@@ -168,20 +180,29 @@ def _scan_pair(
     progress: bool,
     left_label: str,
     right_label: str,
+    region_filter: Optional[RegionFilter],
 ) -> tuple[_ScanResult, _ScanResult]:
     input_threads = max(1, threads // 2)
     arguments = (input_threads, fields, ignore_info)
     if threads == 1:
         return (
-            _scan(left, *arguments, left_details, progress, left_label),
-            _scan(right, *arguments, right_details, progress, right_label),
+            _scan(left, *arguments, left_details, progress, left_label, region_filter),
+            _scan(
+                right, *arguments, right_details, progress, right_label, region_filter
+            ),
         )
     with ProcessPoolExecutor(max_workers=2) as executor:
         left_future = executor.submit(
-            _scan, left, *arguments, left_details, progress, left_label
+            _scan, left, *arguments, left_details, progress, left_label, region_filter
         )
         right_future = executor.submit(
-            _scan, right, *arguments, right_details, progress, right_label
+            _scan,
+            right,
+            *arguments,
+            right_details,
+            progress,
+            right_label,
+            region_filter,
         )
         return left_future.result(), right_future.result()
 
@@ -334,6 +355,8 @@ def compare_variants(
     temp_dir: Optional[Path],
     diff_dir: Optional[Path],
     track_dir: Optional[Path],
+    difference_table: Optional[Path],
+    region_filter: Optional[RegionFilter],
     force: bool,
 ) -> ComparisonResult:
     artifacts: Dict[str, str] = {}
@@ -360,6 +383,7 @@ def compare_variants(
             progress,
             left_label,
             right_label,
+            region_filter,
         )
         changed = [
             name
@@ -372,6 +396,16 @@ def compare_variants(
         overlap = sketch_containment(left_scan.sketch, right_scan.sketch)
         selection_path = workspace / "selections.sqlite" if diff_dir else None
         track_path = workspace / "tracks.sqlite" if track_dir else None
+        table_path = (
+            workspace
+            / (
+                "differences.tsv.gz"
+                if difference_table and difference_table.suffix == ".gz"
+                else "differences.tsv"
+            )
+            if difference_table
+            else None
+        )
         details = (
             analyze_details(
                 left_details,
@@ -380,6 +414,10 @@ def compare_variants(
                 max_examples,
                 selection_path,
                 track_path,
+                table_path,
+                left_scan.contig_counts,
+                right_scan.contig_counts,
+                contig_lengths(left_scan.structural, right_scan.structural),
             )
             if explain and left_details and right_details
             else None
@@ -409,6 +447,10 @@ def compare_variants(
                     force,
                     contig_lengths(left_scan.structural, right_scan.structural),
                 )
+            )
+        if difference_table and table_path:
+            artifacts["difference_table"] = publish_table(
+                table_path, difference_table, force
             )
     return ComparisonResult(
         kind="variant",

@@ -14,8 +14,10 @@ from gendiff.details import (
     DetailWriter,
     SelectionReader,
     analyze_details,
+    merge_detail_databases,
     relationship_label,
 )
+from gendiff.difference_table import publish_table
 from gendiff.fingerprint import (
     Fingerprint,
     FingerprintBuilder,
@@ -30,6 +32,7 @@ from gendiff.fingerprint import (
 )
 from gendiff.model import ComparisonResult
 from gendiff.progress import ProgressReporter
+from gendiff.regions import RegionFilter
 from gendiff.tracks import contig_lengths, write_tracks
 
 
@@ -40,6 +43,7 @@ class _ScanResult:
     structural: Dict[str, Any]
     metadata: Dict[str, Any]
     sketch: Sketch
+    contig_counts: Dict[str, int]
 
 
 def _mode(path: Path) -> str:
@@ -133,6 +137,7 @@ def _scan(
     progress: bool,
     label: str,
     regions: Optional[Sequence[str]] = None,
+    region_filter: Optional[RegionFilter] = None,
 ) -> _ScanResult:
     builders = {name: FingerprintBuilder() for name in ("record",) + tuple(fields)}
     sketch = SketchBuilder()
@@ -142,6 +147,7 @@ def _scan(
     kwargs = {"reference_filename": str(reference)} if reference else {}
     kwargs["threads"] = threads
     count = 0
+    contig_counts = Counter()
     try:
         with pysam.AlignmentFile(str(path), _mode(path), **kwargs) as handle:
             structural = _structural_header(handle.header)
@@ -153,6 +159,12 @@ def _scan(
             )
             for iterator in iterators:
                 for record in iterator:
+                    start = record.reference_start
+                    end = record.reference_end or (start + 1 if start >= 0 else start)
+                    if region_filter and not region_filter.allows(
+                        record.reference_name, start, end
+                    ):
+                        continue
                     identity = _identity(record)
                     values = _record_values(record, ignored)
                     field_digests, record_digest = _record_digests(values, fields)
@@ -168,13 +180,17 @@ def _scan(
                             _record_summary(record, values),
                         )
                     count += 1
+                    if record.reference_name is not None:
+                        contig_counts[record.reference_name] += 1
                     reporter.update(count)
     finally:
         if writer:
             writer.close()
         reporter.finish(count)
     fingerprints = {name: builder.finish() for name, builder in builders.items()}
-    return _ScanResult(fingerprints, count, structural, metadata, sketch.finish())
+    return _ScanResult(
+        fingerprints, count, structural, metadata, sketch.finish(), dict(contig_counts)
+    )
 
 
 def _region_chunks(
@@ -211,6 +227,7 @@ def _merge_scans(scans: Sequence[_ScanResult], fields: Sequence[str]) -> _ScanRe
         scans[0].structural,
         scans[0].metadata,
         merge_sketches(scan.sketch for scan in scans),
+        dict(sum((Counter(scan.contig_counts) for scan in scans), Counter())),
     )
 
 
@@ -224,6 +241,9 @@ def _scan_indexed_pair(
     progress: bool,
     left_label: str,
     right_label: str,
+    left_details: Optional[Path],
+    right_details: Optional[Path],
+    region_filter: Optional[RegionFilter],
 ) -> Optional[tuple[_ScanResult, _ScanResult]]:
     workers_per_input = max(1, threads // 2)
     left_chunks = _region_chunks(left, reference, workers_per_input)
@@ -240,10 +260,11 @@ def _scan_indexed_pair(
                 1,
                 fields,
                 ignore_tags,
-                None,
+                left_details.parent / f"left-{index}.sqlite" if left_details else None,
                 progress,
                 f"{left_label}:{index + 1}",
                 regions,
+                region_filter,
             )
             for index, regions in enumerate(left_chunks)
         ]
@@ -255,15 +276,34 @@ def _scan_indexed_pair(
                 1,
                 fields,
                 ignore_tags,
-                None,
+                right_details.parent / f"right-{index}.sqlite"
+                if right_details
+                else None,
                 progress,
                 f"{right_label}:{index + 1}",
                 regions,
+                region_filter,
             )
             for index, regions in enumerate(right_chunks)
         ]
         left_scans = [future.result() for future in left_futures]
         right_scans = [future.result() for future in right_futures]
+    if left_details:
+        merge_detail_databases(
+            [
+                left_details.parent / f"left-{index}.sqlite"
+                for index in range(len(left_chunks))
+            ],
+            left_details,
+        )
+    if right_details:
+        merge_detail_databases(
+            [
+                right_details.parent / f"right-{index}.sqlite"
+                for index in range(len(right_chunks))
+            ],
+            right_details,
+        )
     return _merge_scans(left_scans, fields), _merge_scans(right_scans, fields)
 
 
@@ -279,8 +319,9 @@ def _scan_pair(
     progress: bool,
     left_label: str,
     right_label: str,
+    region_filter: Optional[RegionFilter],
 ) -> tuple[_ScanResult, _ScanResult]:
-    if threads > 2 and left_details is None and right_details is None:
+    if threads > 2:
         indexed = _scan_indexed_pair(
             left,
             right,
@@ -291,6 +332,9 @@ def _scan_pair(
             progress,
             left_label,
             right_label,
+            left_details,
+            right_details,
+            region_filter,
         )
         if indexed is not None:
             return indexed
@@ -298,15 +342,45 @@ def _scan_pair(
     arguments = (reference, input_threads, fields, ignore_tags)
     if threads == 1:
         return (
-            _scan(left, *arguments, left_details, progress, left_label),
-            _scan(right, *arguments, right_details, progress, right_label),
+            _scan(
+                left,
+                *arguments,
+                left_details,
+                progress,
+                left_label,
+                None,
+                region_filter,
+            ),
+            _scan(
+                right,
+                *arguments,
+                right_details,
+                progress,
+                right_label,
+                None,
+                region_filter,
+            ),
         )
     with ProcessPoolExecutor(max_workers=2) as executor:
         left_future = executor.submit(
-            _scan, left, *arguments, left_details, progress, left_label
+            _scan,
+            left,
+            *arguments,
+            left_details,
+            progress,
+            left_label,
+            None,
+            region_filter,
         )
         right_future = executor.submit(
-            _scan, right, *arguments, right_details, progress, right_label
+            _scan,
+            right,
+            *arguments,
+            right_details,
+            progress,
+            right_label,
+            None,
+            region_filter,
         )
         return left_future.result(), right_future.result()
 
@@ -449,6 +523,8 @@ def compare_alignments(
     temp_dir: Optional[Path],
     diff_dir: Optional[Path],
     track_dir: Optional[Path],
+    difference_table: Optional[Path],
+    region_filter: Optional[RegionFilter],
     force: bool,
 ) -> ComparisonResult:
     artifacts: Dict[str, str] = {}
@@ -467,6 +543,7 @@ def compare_alignments(
             progress,
             left_label,
             right_label,
+            region_filter,
         )
         changed = [
             name
@@ -479,6 +556,16 @@ def compare_alignments(
         overlap = sketch_containment(left_scan.sketch, right_scan.sketch)
         selection_path = Path(work) / "selections.sqlite" if diff_dir else None
         track_path = Path(work) / "tracks.sqlite" if track_dir else None
+        table_path = (
+            Path(work)
+            / (
+                "differences.tsv.gz"
+                if difference_table and difference_table.suffix == ".gz"
+                else "differences.tsv"
+            )
+            if difference_table
+            else None
+        )
         details = (
             analyze_details(
                 left_details,
@@ -487,6 +574,10 @@ def compare_alignments(
                 max_examples,
                 selection_path,
                 track_path,
+                table_path,
+                left_scan.contig_counts,
+                right_scan.contig_counts,
+                contig_lengths(left_scan.structural, right_scan.structural),
             )
             if explain and left_details and right_details
             else None
@@ -516,6 +607,10 @@ def compare_alignments(
                     force,
                     contig_lengths(left_scan.structural, right_scan.structural),
                 )
+            )
+        if difference_table and table_path:
+            artifacts["difference_table"] = publish_table(
+                table_path, difference_table, force
             )
     return ComparisonResult(
         kind="alignment",

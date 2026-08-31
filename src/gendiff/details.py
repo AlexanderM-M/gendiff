@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
+from gendiff.difference_table import DifferenceTableWriter
 from gendiff.fingerprint import normalize
 from gendiff.model import DifferenceDetails
 
@@ -70,6 +71,32 @@ class DetailWriter:
         self._connection.execute("CREATE INDEX records_identity ON records(identity)")
         self._connection.commit()
         self._connection.close()
+
+
+def merge_detail_databases(sources: Sequence[Path], target: Path) -> None:
+    """Merge independently scanned detail shards into one indexed database."""
+    output = sqlite3.connect(str(target))
+    output.execute("PRAGMA journal_mode=OFF")
+    output.execute("PRAGMA synchronous=OFF")
+    output.execute(
+        "CREATE TABLE records (identity TEXT NOT NULL, full BLOB NOT NULL, "
+        "fields BLOB NOT NULL, summary TEXT NOT NULL)"
+    )
+    try:
+        for source in sources:
+            connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+            try:
+                cursor = connection.execute(
+                    "SELECT identity, full, fields, summary FROM records"
+                )
+                while rows := cursor.fetchmany(2000):
+                    output.executemany("INSERT INTO records VALUES (?, ?, ?, ?)", rows)
+            finally:
+                connection.close()
+        output.execute("CREATE INDEX records_identity ON records(identity)")
+        output.commit()
+    finally:
+        output.close()
 
 
 class SelectionWriter:
@@ -275,7 +302,7 @@ def _record_location(
         return
     contig, position = location
     start = ((position - 1) // 1_000_000) * 1_000_000
-    regions[f"{contig}:{start + 1}-{start + 1_000_000}"] += 1
+    regions[(contig, start)] += 1
     if len(loci) < max_loci:
         loci.append(f"{contig}:{max(1, position - 100)}-{position + 100}")
 
@@ -425,6 +452,10 @@ def analyze_details(
     max_examples: int,
     selection_path: Optional[Path] = None,
     track_path: Optional[Path] = None,
+    table_path: Optional[Path] = None,
+    left_contigs: Optional[Dict[str, int]] = None,
+    right_contigs: Optional[Dict[str, int]] = None,
+    lengths: Optional[Dict[str, int]] = None,
 ) -> DifferenceDetails:
     left_groups = iter(_groups(left_path))
     right_groups = iter(_groups(right_path))
@@ -439,6 +470,30 @@ def analyze_details(
     loci: List[str] = []
     selector = SelectionWriter(selection_path) if selection_path else None
     tracks = TrackWriter(track_path) if track_path else None
+    table = DifferenceTableWriter(table_path) if table_path else None
+
+    def capture(
+        identity: str,
+        status: str,
+        left: Optional[_StoredRecord],
+        right: Optional[_StoredRecord],
+        changed: Sequence[str],
+    ) -> None:
+        if table is None and len(examples) >= max_examples:
+            return
+        item = _example(identity, status, left, right, changed)
+        if table:
+            table.add(
+                {"left_only": "only_in_first", "right_only": "only_in_second"}.get(
+                    status, status
+                ),
+                item["identity"],
+                item["changed_fields"],
+                item["left"],
+                item["right"],
+            )
+        if len(examples) < max_examples:
+            examples.append(item)
 
     try:
         while left_group is not None or right_group is not None:
@@ -454,10 +509,7 @@ def analyze_details(
                     if tracks:
                         tracks.add(summary, "only_in_first")
                     _record_location(summary, regions, loci, max_examples)
-                    if len(examples) < max_examples:
-                        examples.append(
-                            _example(identity, "left_only", record, None, ())
-                        )
+                    capture(identity, "left_only", record, None, ())
                 left_group = next(left_groups, None)
                 continue
             if left_group is None or right_group[0] < left_group[0]:
@@ -470,10 +522,7 @@ def analyze_details(
                     if tracks:
                         tracks.add(summary, "only_in_second")
                     _record_location(summary, regions, loci, max_examples)
-                    if len(examples) < max_examples:
-                        examples.append(
-                            _example(identity, "right_only", None, record, ())
-                        )
+                    capture(identity, "right_only", None, record, ())
                 right_group = next(right_groups, None)
                 continue
 
@@ -513,16 +562,7 @@ def analyze_details(
                 for sample in set(left_genotypes) | set(right_genotypes):
                     if left_genotypes.get(sample) != right_genotypes.get(sample):
                         sample_changes[sample] += 1
-                if len(examples) < max_examples:
-                    examples.append(
-                        _example(
-                            identity,
-                            "modified",
-                            left_record,
-                            right_record,
-                            changed,
-                        )
-                    )
+                capture(identity, "modified", left_record, right_record, changed)
             for record, side in [
                 *((record, "left_only") for record in remaining_left),
                 *((record, "right_only") for record in remaining_right),
@@ -542,16 +582,13 @@ def analyze_details(
                         f"only_in_{'first' if side == 'left_only' else 'second'}",
                     )
                 _record_location(summary, regions, loci, max_examples)
-                if len(examples) < max_examples:
-                    examples.append(
-                        _example(
-                            identity,
-                            side,
-                            record if side == "left_only" else None,
-                            record if side == "right_only" else None,
-                            (),
-                        )
-                    )
+                capture(
+                    identity,
+                    side,
+                    record if side == "left_only" else None,
+                    record if side == "right_only" else None,
+                    (),
+                )
             left_group = next(left_groups, None)
             right_group = next(right_groups, None)
     finally:
@@ -559,6 +596,28 @@ def analyze_details(
             selector.close()
         if tracks:
             tracks.close()
+        if table:
+            table.close()
+
+    left_counts = left_contigs or {}
+    right_counts = right_contigs or {}
+    contig_changes = Counter()
+    for (contig, _), changes in regions.items():
+        contig_changes[contig] += changes
+    contig_stats = []
+    for contig, changes in contig_changes.most_common():
+        first = left_counts.get(contig, 0)
+        second = right_counts.get(contig, 0)
+        contig_stats.append(
+            {
+                "contig": contig,
+                "changes": changes,
+                "first_records": first,
+                "second_records": second,
+                "difference_fraction": changes / max(1, first + second),
+                "length": (lengths or {}).get(contig, 0),
+            }
+        )
 
     return DifferenceDetails(
         identical=identical,
@@ -568,12 +627,25 @@ def analyze_details(
         field_changes=dict(field_changes.most_common()),
         transitions=dict(transitions.most_common()),
         top_regions=[
-            {"region": region, "changes": changes}
-            for region, changes in regions.most_common(20)
+            {
+                "region": f"{contig}:{start + 1}-{start + 1_000_000}",
+                "changes": changes,
+            }
+            for (contig, start), changes in regions.most_common(20)
         ],
         sample_changes=dict(sample_changes.most_common()),
         examples=examples,
         loci=loci,
+        region_density=[
+            {
+                "contig": contig,
+                "start": start,
+                "end": start + 1_000_000,
+                "changes": changes,
+            }
+            for (contig, start), changes in sorted(regions.items())
+        ],
+        contig_stats=contig_stats,
     )
 
 
