@@ -33,7 +33,7 @@ Record differences:
 Python 3.9 or newer is required.
 
 ```bash
-python -m pip install git+https://github.com/AlexanderM-M/gendiff.git
+pip install gendiff
 ```
 
 For local development:
