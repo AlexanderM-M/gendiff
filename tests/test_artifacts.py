@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from gendiff.artifacts import output_workspace
+from semantiseq.artifacts import output_workspace
 
 
 def test_force_does_not_replace_an_unmanaged_directory(tmp_path: Path) -> None:

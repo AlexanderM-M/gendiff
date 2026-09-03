@@ -9,18 +9,17 @@ from typing import Any, Dict, Optional, Sequence, Set, Tuple
 
 import pysam
 
-from gendiff.artifacts import output_workspace, sample_slugs, write_manifest
-from gendiff.cache import cache_key, load_entry, store_entry
-from gendiff.details import (
+from semantiseq.artifacts import output_workspace, sample_slugs, write_manifest
+from semantiseq.cache import cache_key, load_entry, store_entry
+from semantiseq.details import (
     DetailWriter,
     SelectionReader,
     analyze_details,
-    merge_detail_databases,
     relationship_label,
 )
-from gendiff.diagnostics import header_differences
-from gendiff.difference_table import publish_table
-from gendiff.fingerprint import (
+from semantiseq.diagnostics import header_differences
+from semantiseq.difference_table import publish_table
+from semantiseq.fingerprint import (
     Fingerprint,
     FingerprintBuilder,
     Sketch,
@@ -28,15 +27,13 @@ from gendiff.fingerprint import (
     digest,
     digest_native,
     digest_parts,
-    merge_sketches,
-    normalize,
     sketch_containment,
 )
-from gendiff.metrics import add_alignment_metrics, merge_metric_counts
-from gendiff.model import ComparisonResult
-from gendiff.progress import ProgressReporter
-from gendiff.regions import RegionFilter
-from gendiff.tracks import contig_lengths, write_tracks
+from semantiseq.metrics import add_variant_metrics
+from semantiseq.model import ComparisonResult
+from semantiseq.progress import ProgressReporter
+from semantiseq.regions import RegionFilter
+from semantiseq.tracks import contig_lengths, write_tracks
 
 
 @dataclass(frozen=True)
@@ -52,81 +49,83 @@ class _ScanResult:
     metric_counts: Dict[str, Dict[float, int]]
 
 
-def _mode(path: Path) -> str:
-    return "rc" if path.name.lower().endswith(".cram") else "rb"
+def _structural_header(header: pysam.VariantHeader) -> Dict[str, Any]:
+    contigs = {
+        name: {"length": header.contigs[name].length} for name in sorted(header.contigs)
+    }
+    definitions = {}
+    for name, records in (
+        ("info", header.info),
+        ("formats", header.formats),
+        ("filters", header.filters),
+    ):
+        definitions[name] = {
+            key: {
+                "number": str(getattr(value, "number", "")),
+                "type": str(getattr(value, "type", "")),
+            }
+            for key, value in sorted(records.items())
+        }
+    return {"contigs": contigs, "samples": sorted(header.samples), **definitions}
 
 
-def _ordered_header(header: pysam.AlignmentHeader) -> Dict[str, Any]:
-    value = header.to_dict()
+def _metadata_header(header: pysam.VariantHeader) -> Dict[str, Any]:
+    records = sorted(str(record).strip() for record in header.records)
+    return {"records": records, "samples": sorted(header.samples)}
+
+
+def _sample_values(record: pysam.VariantRecord) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
-    for key, item in value.items():
-        if key == "SQ":
-            result[key] = sorted(item, key=lambda entry: entry.get("SN", ""))
-        elif key in {"RG", "PG"}:
-            result[key] = sorted(item, key=lambda entry: entry.get("ID", ""))
-        elif key == "CO":
-            result[key] = sorted(item)
-        else:
-            result[key] = item
-    return normalize(result)
-
-
-def _structural_header(header: pysam.AlignmentHeader) -> Dict[str, Any]:
-    ordered = _ordered_header(header)
-    return {key: ordered[key] for key in ("SQ", "RG") if key in ordered}
-
-
-def _identity(record: pysam.AlignedSegment) -> Any:
-    role_flags = record.flag & (0x40 | 0x80 | 0x100 | 0x800)
-    return record.query_name, role_flags
+    for name in sorted(record.samples):
+        sample = record.samples[name]
+        result[name] = {
+            "values": {key: sample[key] for key in sorted(sample.keys())},
+            "phased": sample.phased,
+        }
+    return result
 
 
 def _record_values(
-    record: pysam.AlignedSegment, ignore_tags: Set[str]
+    record: pysam.VariantRecord, ignore_info: Set[str]
 ) -> Dict[str, Any]:
-    tags = sorted(
-        (
-            tag
-            for tag in record.get_tags(with_value_type=True)
-            if tag[0] not in ignore_tags
-        ),
-        key=lambda tag: tag[0],
-    )
     return {
-        "read_name": record.query_name,
-        "flags": record.flag,
-        "reference": record.reference_name,
-        "position": record.reference_start,
-        "mapping_quality": record.mapping_quality,
-        "cigar": record.cigartuples,
-        "mate": (record.next_reference_name, record.next_reference_start),
-        "template_length": record.template_length,
-        "sequence": record.query_sequence,
-        "qualities": record.query_qualities,
-        "tags": tags,
+        "locus": (record.contig, record.pos, record.stop),
+        "identifiers": record.id,
+        "alleles": record.alleles,
+        "quality": record.qual,
+        "filters": sorted(record.filter.keys()),
+        "info": {
+            key: record.info[key]
+            for key in sorted(record.info.keys())
+            if key not in ignore_info
+        },
+        "samples": _sample_values(record),
     }
+
+
+def _identity(record: pysam.VariantRecord) -> Any:
+    return record.contig, record.pos, record.alleles
 
 
 def _record_summary(
-    record: pysam.AlignedSegment, values: Dict[str, Any]
+    record: pysam.VariantRecord, values: Dict[str, Any]
 ) -> Dict[str, Any]:
-    summary = {
-        "read_name": record.query_name,
-        "flags": record.flag,
-        "reference": record.reference_name,
-        "position": record.reference_start + 1 if record.reference_start >= 0 else -1,
-        "mapping_quality": record.mapping_quality,
-        "cigar": record.cigarstring,
-        "query_length": record.query_length,
-        "tags": [tag[0] for tag in values["tags"]],
-        "_tag_digests": {
-            tag: digest_native((value, value_type))
-            for tag, value, value_type in values["tags"]
+    return {
+        "contig": record.contig,
+        "position": record.pos,
+        "identifiers": record.id,
+        "alleles": record.alleles,
+        "quality": record.qual,
+        "filters": sorted(record.filter.keys()),
+        "_info": values["info"],
+        "genotypes": {
+            sample: {
+                "GT": record.samples[sample].get("GT"),
+                "phased": record.samples[sample].phased,
+            }
+            for sample in sorted(record.samples)
         },
     }
-    if record.has_tag("RG"):
-        summary["read_group"] = record.get_tag("RG")
-    return summary
 
 
 def _record_digests(
@@ -138,14 +137,12 @@ def _record_digests(
 
 def _scan(
     path: Path,
-    reference: Optional[Path],
     threads: int,
     fields: Sequence[str],
-    ignore_tags: Sequence[str],
+    ignore_info: Sequence[str],
     details_path: Optional[Path],
     progress: bool,
     label: str,
-    regions: Optional[Sequence[str]] = None,
     region_filter: Optional[RegionFilter] = None,
 ) -> _ScanResult:
     builders = {name: FingerprintBuilder() for name in ("record",) + tuple(fields)}
@@ -153,53 +150,40 @@ def _scan(
     content_sketch = SketchBuilder()
     writer = DetailWriter(details_path) if details_path else None
     reporter = ProgressReporter(label, progress)
-    ignored = set(ignore_tags)
-    kwargs = {"reference_filename": str(reference)} if reference else {}
-    kwargs["threads"] = threads
+    ignored = set(ignore_info)
     count = 0
     contig_counts = Counter()
     window_counts = Counter()
     metric_counts: Dict[str, Counter] = {}
     try:
-        with pysam.AlignmentFile(str(path), _mode(path), **kwargs) as handle:
+        with pysam.VariantFile(str(path), threads=threads) as handle:
             structural = _structural_header(handle.header)
-            metadata = _ordered_header(handle.header)
-            iterators = (
-                (handle.fetch(region) for region in regions)
-                if regions is not None
-                else (handle.fetch(until_eof=True),)
-            )
-            for iterator in iterators:
-                for record in iterator:
-                    start = record.reference_start
-                    end = record.reference_end or (start + 1 if start >= 0 else start)
-                    if region_filter and not region_filter.allows(
-                        record.reference_name, start, end
-                    ):
-                        continue
-                    add_alignment_metrics(metric_counts, record, fields)
-                    identity = _identity(record)
-                    values = _record_values(record, ignored)
-                    field_digests, record_digest = _record_digests(values, fields)
-                    for name, field_digest in zip(fields, field_digests):
-                        builders[name].add_digest(field_digest)
-                    builders["record"].add_digest(record_digest)
-                    sketch.add_digest(digest_native(identity))
-                    content_sketch.add_digest(record_digest)
-                    if writer:
-                        writer.add(
-                            identity,
-                            record_digest,
-                            field_digests,
-                            _record_summary(record, values),
-                        )
-                    count += 1
-                    if record.reference_name is not None:
-                        contig_counts[record.reference_name] += 1
-                        window_counts[
-                            (record.reference_name, record.reference_start // 1_000_000)
-                        ] += 1
-                    reporter.update(count)
+            metadata = _metadata_header(handle.header)
+            for record in handle:
+                if region_filter and not region_filter.allows(
+                    record.contig, record.start, record.stop
+                ):
+                    continue
+                add_variant_metrics(metric_counts, record, fields, ignore_info)
+                identity = _identity(record)
+                values = _record_values(record, ignored)
+                field_digests, record_digest = _record_digests(values, fields)
+                for name, field_digest in zip(fields, field_digests):
+                    builders[name].add_digest(field_digest)
+                builders["record"].add_digest(record_digest)
+                sketch.add_digest(digest_native(identity))
+                content_sketch.add_digest(record_digest)
+                if writer:
+                    writer.add(
+                        identity,
+                        record_digest,
+                        field_digests,
+                        _record_summary(record, values),
+                    )
+                count += 1
+                contig_counts[record.contig] += 1
+                window_counts[(record.contig, record.start // 1_000_000)] += 1
+                reporter.update(count)
     finally:
         if writer:
             writer.close()
@@ -218,130 +202,12 @@ def _scan(
     )
 
 
-def _region_chunks(
-    path: Path, reference: Optional[Path], workers: int
-) -> Optional[list[list[str]]]:
-    kwargs = {"reference_filename": str(reference)} if reference else {}
-    with pysam.AlignmentFile(str(path), _mode(path), **kwargs) as handle:
-        if not handle.has_index():
-            return None
-        items = sorted(
-            zip(handle.references, handle.lengths),
-            key=lambda item: item[1],
-            reverse=True,
-        )
-    bins: list[list[str]] = [[] for _ in range(min(workers, max(1, len(items))))]
-    sizes = [0] * len(bins)
-    for name, length in items:
-        index = min(range(len(bins)), key=sizes.__getitem__)
-        bins[index].append(name)
-        sizes[index] += length
-    bins[-1].append("*")
-    return bins
-
-
-def _merge_scans(scans: Sequence[_ScanResult], fields: Sequence[str]) -> _ScanResult:
-    builders = {name: FingerprintBuilder() for name in ("record",) + tuple(fields)}
-    for scan in scans:
-        for name, fingerprint in scan.fingerprints.items():
-            builders[name].merge(fingerprint)
-    fingerprints = {name: builder.finish() for name, builder in builders.items()}
-    return _ScanResult(
-        fingerprints,
-        sum(scan.count for scan in scans),
-        scans[0].structural,
-        scans[0].metadata,
-        merge_sketches(scan.sketch for scan in scans),
-        merge_sketches(scan.content_sketch for scan in scans),
-        dict(sum((Counter(scan.contig_counts) for scan in scans), Counter())),
-        dict(sum((Counter(scan.window_counts) for scan in scans), Counter())),
-        merge_metric_counts(scan.metric_counts for scan in scans),
-    )
-
-
-def _scan_indexed_pair(
-    left: Path,
-    right: Path,
-    reference: Optional[Path],
-    threads: int,
-    fields: Sequence[str],
-    ignore_tags: Sequence[str],
-    progress: bool,
-    left_label: str,
-    right_label: str,
-    left_details: Optional[Path],
-    right_details: Optional[Path],
-    region_filter: Optional[RegionFilter],
-) -> Optional[tuple[_ScanResult, _ScanResult]]:
-    workers_per_input = max(1, threads // 2)
-    left_chunks = _region_chunks(left, reference, workers_per_input)
-    right_chunks = _region_chunks(right, reference, workers_per_input)
-    if left_chunks is None or right_chunks is None:
-        return None
-    task_count = len(left_chunks) + len(right_chunks)
-    with ProcessPoolExecutor(max_workers=min(threads, task_count)) as executor:
-        left_futures = [
-            executor.submit(
-                _scan,
-                left,
-                reference,
-                1,
-                fields,
-                ignore_tags,
-                left_details.parent / f"left-{index}.sqlite" if left_details else None,
-                progress,
-                f"{left_label}:{index + 1}",
-                regions,
-                region_filter,
-            )
-            for index, regions in enumerate(left_chunks)
-        ]
-        right_futures = [
-            executor.submit(
-                _scan,
-                right,
-                reference,
-                1,
-                fields,
-                ignore_tags,
-                right_details.parent / f"right-{index}.sqlite"
-                if right_details
-                else None,
-                progress,
-                f"{right_label}:{index + 1}",
-                regions,
-                region_filter,
-            )
-            for index, regions in enumerate(right_chunks)
-        ]
-        left_scans = [future.result() for future in left_futures]
-        right_scans = [future.result() for future in right_futures]
-    if left_details:
-        merge_detail_databases(
-            [
-                left_details.parent / f"left-{index}.sqlite"
-                for index in range(len(left_chunks))
-            ],
-            left_details,
-        )
-    if right_details:
-        merge_detail_databases(
-            [
-                right_details.parent / f"right-{index}.sqlite"
-                for index in range(len(right_chunks))
-            ],
-            right_details,
-        )
-    return _merge_scans(left_scans, fields), _merge_scans(right_scans, fields)
-
-
 def _scan_pair(
     left: Path,
     right: Path,
-    reference: Optional[Path],
     threads: int,
     fields: Sequence[str],
-    ignore_tags: Sequence[str],
+    ignore_info: Sequence[str],
     left_details: Optional[Path],
     right_details: Optional[Path],
     progress: bool,
@@ -349,56 +215,18 @@ def _scan_pair(
     right_label: str,
     region_filter: Optional[RegionFilter],
 ) -> tuple[_ScanResult, _ScanResult]:
-    if threads > 2:
-        indexed = _scan_indexed_pair(
-            left,
-            right,
-            reference,
-            threads,
-            fields,
-            ignore_tags,
-            progress,
-            left_label,
-            right_label,
-            left_details,
-            right_details,
-            region_filter,
-        )
-        if indexed is not None:
-            return indexed
     input_threads = max(1, threads // 2)
-    arguments = (reference, input_threads, fields, ignore_tags)
+    arguments = (input_threads, fields, ignore_info)
     if threads == 1:
         return (
+            _scan(left, *arguments, left_details, progress, left_label, region_filter),
             _scan(
-                left,
-                *arguments,
-                left_details,
-                progress,
-                left_label,
-                None,
-                region_filter,
-            ),
-            _scan(
-                right,
-                *arguments,
-                right_details,
-                progress,
-                right_label,
-                None,
-                region_filter,
+                right, *arguments, right_details, progress, right_label, region_filter
             ),
         )
     with ProcessPoolExecutor(max_workers=2) as executor:
         left_future = executor.submit(
-            _scan,
-            left,
-            *arguments,
-            left_details,
-            progress,
-            left_label,
-            None,
-            region_filter,
+            _scan, left, *arguments, left_details, progress, left_label, region_filter
         )
         right_future = executor.submit(
             _scan,
@@ -407,7 +235,6 @@ def _scan_pair(
             right_details,
             progress,
             right_label,
-            None,
             region_filter,
         )
         return left_future.result(), right_future.result()
@@ -415,34 +242,28 @@ def _scan_pair(
 
 def _write_diff_side(
     source: Path,
-    reference: Optional[Path],
     threads: int,
     fields: Sequence[str],
-    ignore_tags: Sequence[str],
+    ignore_info: Sequence[str],
     selection_path: Path,
     side: int,
     only_path: Path,
     modified_path: Path,
 ) -> Counter:
-    kwargs = {"reference_filename": str(reference)} if reference else {}
-    kwargs["threads"] = max(1, threads)
     reader = SelectionReader(selection_path, side)
     counts = Counter()
     try:
-        with pysam.AlignmentFile(str(source), _mode(source), **kwargs) as handle:
+        with pysam.VariantFile(str(source), threads=max(1, threads)) as handle:
             with (
-                pysam.AlignmentFile(
-                    str(only_path), "wb", header=handle.header, threads=max(1, threads)
+                pysam.VariantFile(
+                    str(only_path), "w", header=handle.header
                 ) as only_output,
-                pysam.AlignmentFile(
-                    str(modified_path),
-                    "wb",
-                    header=handle.header,
-                    threads=max(1, threads),
+                pysam.VariantFile(
+                    str(modified_path), "w", header=handle.header
                 ) as modified_output,
             ):
-                ignored = set(ignore_tags)
-                for record in handle.fetch(until_eof=True):
+                ignored = set(ignore_info)
+                for record in handle:
                     values = _record_values(record, ignored)
                     _, record_digest = _record_digests(values, fields)
                     status = reader.take(_identity(record), record_digest)
@@ -465,32 +286,31 @@ def _write_diff_side(
 def _write_diff_outputs(
     left: Path,
     right: Path,
-    reference: Optional[Path],
     threads: int,
     fields: Sequence[str],
     profile: str,
-    ignore_tags: Sequence[str],
+    ignore_info: Sequence[str],
     selection_path: Path,
     target: Path,
     force: bool,
     left_label: str,
     right_label: str,
+    normalized: bool,
 ) -> Dict[str, str]:
     left_slug, right_slug = sample_slugs(left_label, right_label)
     names = {
-        "only_in_first": f"only-in-{left_slug}.bam",
-        "only_in_second": f"only-in-{right_slug}.bam",
-        "modified_first": f"modified-{left_slug}.bam",
-        "modified_second": f"modified-{right_slug}.bam",
+        "only_in_first": f"only-in-{left_slug}.vcf",
+        "only_in_second": f"only-in-{right_slug}.vcf",
+        "modified_first": f"modified-{left_slug}.vcf",
+        "modified_second": f"modified-{right_slug}.vcf",
     }
     with output_workspace(target, force) as workspace:
         per_input_threads = max(1, threads // 2)
         left_counts = _write_diff_side(
             left,
-            reference,
             per_input_threads,
             fields,
-            ignore_tags,
+            ignore_info,
             selection_path,
             0,
             workspace / names["only_in_first"],
@@ -498,10 +318,9 @@ def _write_diff_outputs(
         )
         right_counts = _write_diff_side(
             right,
-            reference,
             per_input_threads,
             fields,
-            ignore_tags,
+            ignore_info,
             selection_path,
             1,
             workspace / names["only_in_second"],
@@ -510,8 +329,9 @@ def _write_diff_outputs(
         write_manifest(
             workspace / "manifest.json",
             {
-                "gendiff_diff_format": 1,
-                "format": "BAM",
+                "semantiseq_diff_format": 1,
+                "format": "VCF",
+                "normalized": normalized,
                 "profile": profile,
                 "compared_fields": fields,
                 "inputs": [
@@ -535,16 +355,33 @@ def _write_diff_outputs(
     }
 
 
-def compare_alignments(
+def _normalize(path: Path, output: Path, reference: Path) -> None:
+    from pysam import bcftools
+
+    bcftools.norm(
+        "-f",
+        str(reference),
+        "-m",
+        "-any",
+        "-Ob",
+        "-o",
+        str(output),
+        str(path),
+        catch_stdout=False,
+    )
+
+
+def compare_variants(
     left: Path,
     right: Path,
     reference: Optional[Path],
+    normalize_variants: bool,
     threads: int,
     fields: Sequence[str],
     profile: str,
     left_label: str,
     right_label: str,
-    ignore_tags: Sequence[str],
+    ignore_info: Sequence[str],
     explain: bool,
     max_examples: int,
     progress: bool,
@@ -557,9 +394,11 @@ def compare_alignments(
     force: bool,
 ) -> ComparisonResult:
     artifacts: Dict[str, str] = {}
-    with TemporaryDirectory(prefix="gendiff-", dir=temp_dir) as work:
-        left_details = Path(work) / "left.sqlite" if explain else None
-        right_details = Path(work) / "right.sqlite" if explain else None
+    with TemporaryDirectory(prefix="semantiseq-", dir=temp_dir) as work:
+        workspace = Path(work)
+        scan_left, scan_right = left, right
+        left_details = workspace / "left.sqlite" if explain else None
+        right_details = workspace / "right.sqlite" if explain else None
         reference_setting = None
         if reference:
             stat = reference.stat()
@@ -569,10 +408,11 @@ def compare_alignments(
                 stat.st_mtime_ns,
             ]
         settings = {
-            "kind": "alignment",
+            "kind": "variant",
             "reference": reference_setting,
+            "normalize": normalize_variants,
             "fields": list(fields),
-            "ignore_tags": list(ignore_tags),
+            "ignore_info": list(ignore_info),
             "regions": repr(region_filter),
         }
         left_key = cache_key(left, settings) if cache_dir else ""
@@ -583,53 +423,58 @@ def compare_alignments(
         cached_right = (
             load_entry(cache_dir, right_key, right_details) if cache_dir else None
         )
+        if normalize_variants:
+            if reference is None:
+                raise ValueError("--normalize requires --reference")
+            if cached_left is None or diff_dir:
+                scan_left = workspace / "left.normalized.bcf"
+                _normalize(left, scan_left, reference)
+            if cached_right is None or diff_dir:
+                scan_right = workspace / "right.normalized.bcf"
+                _normalize(right, scan_right, reference)
         left_scan = _ScanResult(**cached_left) if cached_left else None
         right_scan = _ScanResult(**cached_right) if cached_right else None
         stored_left = stored_right = False
         if left_scan is None and right_scan is None and cache_dir:
             input_threads = max(1, threads // 2)
-            arguments = (reference, input_threads, fields, ignore_tags)
+            arguments = (input_threads, fields, ignore_info)
             if threads == 1:
                 left_scan = _scan(
-                    left,
+                    scan_left,
                     *arguments,
                     left_details,
                     progress,
                     left_label,
-                    None,
                     region_filter,
                 )
                 store_entry(cache_dir, left_key, left_scan, left_details)
                 stored_left = True
                 right_scan = _scan(
-                    right,
+                    scan_right,
                     *arguments,
                     right_details,
                     progress,
                     right_label,
-                    None,
                     region_filter,
                 )
             else:
                 with ProcessPoolExecutor(max_workers=2) as executor:
                     left_future = executor.submit(
                         _scan,
-                        left,
+                        scan_left,
                         *arguments,
                         left_details,
                         progress,
                         left_label,
-                        None,
                         region_filter,
                     )
                     right_future = executor.submit(
                         _scan,
-                        right,
+                        scan_right,
                         *arguments,
                         right_details,
                         progress,
                         right_label,
-                        None,
                         region_filter,
                     )
                     future_sides = {left_future: "left", right_future: "right"}
@@ -644,12 +489,11 @@ def compare_alignments(
                             stored_right = True
         elif left_scan is None and right_scan is None:
             left_scan, right_scan = _scan_pair(
-                left,
-                right,
-                reference,
+                scan_left,
+                scan_right,
                 threads,
                 fields,
-                ignore_tags,
+                ignore_info,
                 left_details,
                 right_details,
                 progress,
@@ -659,28 +503,24 @@ def compare_alignments(
             )
         elif left_scan is None:
             left_scan = _scan(
-                left,
-                reference,
+                scan_left,
                 threads,
                 fields,
-                ignore_tags,
+                ignore_info,
                 left_details,
                 progress,
                 left_label,
-                None,
                 region_filter,
             )
         elif right_scan is None:
             right_scan = _scan(
-                right,
-                reference,
+                scan_right,
                 threads,
                 fields,
-                ignore_tags,
+                ignore_info,
                 right_details,
                 progress,
                 right_label,
-                None,
                 region_filter,
             )
         if cache_dir:
@@ -704,10 +544,10 @@ def compare_alignments(
             content_similarity *= min(left_scan.count, right_scan.count) / max(
                 left_scan.count, right_scan.count
             )
-        selection_path = Path(work) / "selections.sqlite" if diff_dir else None
-        track_path = Path(work) / "tracks.sqlite" if track_dir else None
+        selection_path = workspace / "selections.sqlite" if diff_dir else None
+        track_path = workspace / "tracks.sqlite" if track_dir else None
         table_path = (
-            Path(work)
+            workspace
             / (
                 "differences.tsv.gz"
                 if difference_table and difference_table.suffix == ".gz"
@@ -739,18 +579,18 @@ def compare_alignments(
         if diff_dir and selection_path:
             artifacts.update(
                 _write_diff_outputs(
-                    left,
-                    right,
-                    reference,
+                    scan_left,
+                    scan_right,
                     threads,
                     fields,
                     profile,
-                    ignore_tags,
+                    ignore_info,
                     selection_path,
                     diff_dir,
                     force,
                     left_label,
                     right_label,
+                    normalize_variants,
                 )
             )
         if track_dir and track_path:
@@ -769,7 +609,7 @@ def compare_alignments(
                 table_path, difference_table, force
             )
     return ComparisonResult(
-        kind="alignment",
+        kind="variant",
         left=left,
         right=right,
         left_label=left_label,
@@ -789,7 +629,7 @@ def compare_alignments(
         details=details,
         artifacts=artifacts,
         header_differences=header_differences(
-            "alignment", left_scan.structural, right_scan.structural
+            "variant", left_scan.structural, right_scan.structural
         ),
         cache=(
             {

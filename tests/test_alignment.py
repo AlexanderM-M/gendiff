@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pysam
 
-from gendiff.compare import compare_files
-from gendiff.report import render_html, render_svg
+from semantiseq.compare import compare_files
+from semantiseq.report import render_html, render_svg
 
 
 def _write_bam(

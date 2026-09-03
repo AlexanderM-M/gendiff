@@ -3,14 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Sequence
 
-from gendiff.alignment import compare_alignments
-from gendiff.model import ComparisonResult
-from gendiff.profiles import fields_for
-from gendiff.regions import load_region_filter
-from gendiff.variant import compare_variants
+from semantiseq.alignment import compare_alignments
+from semantiseq.model import ComparisonResult
+from semantiseq.profiles import fields_for
+from semantiseq.regions import load_region_filter
+from semantiseq.variant import compare_variants
 
 
-class GenDiffError(Exception):
+class SemantiSeqError(Exception):
     """Raised when inputs cannot be compared."""
 
 
@@ -51,7 +51,7 @@ def _input_labels(
         (right_label, "--name-b"),
     ):
         if value is not None and not value.strip():
-            raise GenDiffError(f"{option} cannot be empty")
+            raise SemantiSeqError(f"{option} cannot be empty")
     first = left_label.strip() if left_label else _inferred_label(left)
     second = right_label.strip() if right_label else _inferred_label(right)
     if first == second:
@@ -70,7 +70,7 @@ def _kind(path: Path) -> str:
         return "alignment"
     if name.endswith((".vcf", ".vcf.gz", ".bcf")):
         return "variant"
-    raise GenDiffError(f"unsupported file type: {path}")
+    raise SemantiSeqError(f"unsupported file type: {path}")
 
 
 def compare_files(
@@ -99,60 +99,60 @@ def compare_files(
     force: bool = False,
 ) -> ComparisonResult:
     if threads < 1:
-        raise GenDiffError("threads must be at least 1")
+        raise SemantiSeqError("threads must be at least 1")
     for path in (left, right):
         if not path.is_file():
-            raise GenDiffError(f"file not found: {path}")
+            raise SemantiSeqError(f"file not found: {path}")
     if reference is not None and not reference.is_file():
-        raise GenDiffError(f"reference not found: {reference}")
+        raise SemantiSeqError(f"reference not found: {reference}")
     if max_examples < 0:
-        raise GenDiffError("max examples must be at least 0")
+        raise SemantiSeqError("max examples must be at least 0")
     if temp_dir is not None and not temp_dir.is_dir():
-        raise GenDiffError(f"temporary directory not found: {temp_dir}")
+        raise SemantiSeqError(f"temporary directory not found: {temp_dir}")
     if cache_dir is not None and cache_dir.exists() and not cache_dir.is_dir():
-        raise GenDiffError(f"cache path is not a directory: {cache_dir}")
+        raise SemantiSeqError(f"cache path is not a directory: {cache_dir}")
     for path, label in (
         (regions_file, "regions file"),
         (exclude_regions, "excluded regions file"),
     ):
         if path is not None and not path.is_file():
-            raise GenDiffError(f"{label} not found: {path}")
+            raise SemantiSeqError(f"{label} not found: {path}")
     try:
         region_filter = load_region_filter(regions, regions_file, exclude_regions)
     except (OSError, ValueError) as error:
-        raise GenDiffError(str(error)) from error
+        raise SemantiSeqError(str(error)) from error
     if diff_dir is not None:
         explain = True
         resolved_diff = diff_dir.absolute()
         if resolved_diff in {left.absolute(), right.absolute()}:
-            raise GenDiffError("diff output directory cannot be an input file")
+            raise SemantiSeqError("diff output directory cannot be an input file")
     if track_dir is not None:
         explain = True
         resolved_tracks = track_dir.absolute()
         if resolved_tracks in {left.absolute(), right.absolute()}:
-            raise GenDiffError("track output directory cannot be an input file")
+            raise SemantiSeqError("track output directory cannot be an input file")
         if diff_dir is not None and resolved_tracks == diff_dir.absolute():
-            raise GenDiffError("diff and track output directories must differ")
+            raise SemantiSeqError("diff and track output directories must differ")
     if difference_table is not None:
         explain = True
         if difference_table.absolute() in {left.absolute(), right.absolute()}:
-            raise GenDiffError("difference table cannot be an input file")
+            raise SemantiSeqError("difference table cannot be an input file")
     labels = _input_labels(left, right, left_label, right_label)
 
     left_kind = _kind(left)
     right_kind = _kind(right)
     if left_kind != right_kind:
-        raise GenDiffError("inputs must be the same file type family")
+        raise SemantiSeqError("inputs must be the same file type family")
     try:
         fields = fields_for(left_kind, profile)
     except ValueError as error:
-        raise GenDiffError(str(error)) from error
+        raise SemantiSeqError(str(error)) from error
 
     if left_kind == "alignment":
         if normalize_variants:
-            raise GenDiffError("--normalize is only valid for VCF/BCF comparisons")
+            raise SemantiSeqError("--normalize is only valid for VCF/BCF comparisons")
         if ignore_info:
-            raise GenDiffError("--ignore-info is only valid for VCF/BCF comparisons")
+            raise SemantiSeqError("--ignore-info is only valid for VCF/BCF comparisons")
         return compare_alignments(
             left,
             right,
@@ -174,13 +174,13 @@ def compare_files(
             force,
         )
     if ignore_tags:
-        raise GenDiffError("--ignore-tag is only valid for BAM/CRAM comparisons")
+        raise SemantiSeqError("--ignore-tag is only valid for BAM/CRAM comparisons")
     if normalize_variants:
         if reference is None:
-            raise GenDiffError("--normalize requires --reference")
+            raise SemantiSeqError("--normalize requires --reference")
         reference_index = Path(f"{reference}.fai")
         if not reference_index.is_file():
-            raise GenDiffError(
+            raise SemantiSeqError(
                 f"reference index not found: {reference_index} "
                 "(create it with samtools faidx)"
             )

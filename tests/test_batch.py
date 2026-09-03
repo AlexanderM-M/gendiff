@@ -5,8 +5,8 @@ from pathlib import Path
 import pysam
 import pytest
 
-from gendiff.batch import BatchError, BatchPolicy, compare_manifest, read_manifest
-from gendiff.cli import main
+from semantiseq.batch import BatchError, BatchPolicy, compare_manifest, read_manifest
+from semantiseq.cli import main
 
 
 def _write_vcf(path: Path, genotype=(0, 1)) -> None:
@@ -118,7 +118,7 @@ def test_batch_cli_writes_all_outputs_and_real_diffs(capsys, tmp_path: Path) -> 
     html = tmp_path / "regression.html"
     json_report = tmp_path / "regression.json"
     junit = tmp_path / "regression.xml"
-    multiqc = tmp_path / "gendiff_mqc.json"
+    multiqc = tmp_path / "semantiseq_mqc.json"
     diffs = tmp_path / "diffs"
     tracks = tmp_path / "tracks"
 
@@ -145,7 +145,7 @@ def test_batch_cli_writes_all_outputs_and_real_diffs(capsys, tmp_path: Path) -> 
 
     assert status == 0
     assert "Comparisons: 1 (1 passed, 0 failed)" in capsys.readouterr().out
-    assert "GenDiff pipeline regression" in html.read_text()
+    assert "SemantiSeq pipeline regression" in html.read_text()
     assert "Stage overview" in html.read_text()
     assert "diff files" in html.read_text()
     aggregate = json.loads(json_report.read_text())
@@ -155,7 +155,7 @@ def test_batch_cli_writes_all_outputs_and_real_diffs(capsys, tmp_path: Path) -> 
     assert suite.attrib["tests"] == "1"
     assert suite.attrib["failures"] == "0"
     multiqc_data = json.loads(multiqc.read_text())
-    assert multiqc_data["id"] == "gendiff_pipeline_regression"
+    assert multiqc_data["id"] == "semantiseq_pipeline_regression"
 
     batch_manifest = json.loads((diffs / "manifest.json").read_text())
     assert batch_manifest["kind"] == "batch"

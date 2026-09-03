@@ -9,7 +9,7 @@ from html import escape
 from pathlib import Path
 from typing import Iterable, Optional
 
-from gendiff.batch import BatchItem, BatchResult
+from semantiseq.batch import BatchItem, BatchResult
 
 
 def render_batch_text(result: BatchResult) -> str:
@@ -160,7 +160,7 @@ def render_batch_html(result: BatchResult, report_path: Optional[Path] = None) -
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GenDiff pipeline regression</title>
+<title>SemantiSeq pipeline regression</title>
 <style>
 :root{{--bg:#f6f8fa;--panel:#fff;--text:#1f2328;--muted:#59636e;
 --line:#d0d7de;--ok:#1a7f37;--bad:#cf222e}}*{{box-sizing:border-box}}
@@ -178,7 +178,7 @@ border-bottom:1px solid var(--line);text-align:left;vertical-align:top}}
 th{{background:#f6f8fa;white-space:nowrap}}a{{color:#0969da}}
 @media(max-width:700px){{.cards{{grid-template-columns:1fr}}}}
 </style></head><body><main>
-<h1>GenDiff pipeline regression</h1>
+<h1>SemantiSeq pipeline regression</h1>
 <div class="{status_class}"><strong>{status}</strong></div>
 <p class="muted">{escape(result.manifest.name)}</p>
 <div class="cards">
@@ -201,7 +201,7 @@ def render_junit(result: BatchResult) -> str:
     suite = ET.Element(
         "testsuite",
         {
-            "name": "gendiff pipeline regression",
+            "name": "semantiseq pipeline regression",
             "tests": str(len(result.items)),
             "failures": str(failures),
             "errors": "0",
@@ -220,7 +220,7 @@ def render_junit(result: BatchResult) -> str:
             suite,
             "testcase",
             {
-                "classname": f"gendiff.batch.{item.entry.sample}",
+                "classname": f"semantiseq.batch.{item.entry.sample}",
                 "name": item.entry.stage,
                 "time": f"{item.duration_seconds:.6f}",
             },
@@ -230,7 +230,7 @@ def render_junit(result: BatchResult) -> str:
             failure = ET.SubElement(
                 case,
                 "failure",
-                {"message": message, "type": "GenDiffRegression"},
+                {"message": message, "type": "SemantiSeqRegression"},
             )
             failure.text = message
         decision_text = "\n".join(
@@ -261,11 +261,11 @@ def render_multiqc(result: BatchResult) -> str:
             "first_divergence": earliest.get(item.entry.sample) == item.entry.stage,
         }
     payload = {
-        "id": "gendiff_pipeline_regression",
-        "section_name": "GenDiff pipeline regression",
+        "id": "semantiseq_pipeline_regression",
+        "section_name": "SemantiSeq pipeline regression",
         "description": "Semantic differences between baseline and candidate outputs.",
         "plot_type": "table",
-        "pconfig": {"id": "gendiff_regression", "title": "GenDiff comparisons"},
+        "pconfig": {"id": "semantiseq_regression", "title": "SemantiSeq comparisons"},
         "headers": {
             "stage": {"title": "Stage"},
             "status": {"title": "Status"},

@@ -45,7 +45,7 @@ def output_workspace(target: Path, force: bool) -> Iterator[Path]:
             raise ValueError(
                 f"refusing to replace unmanaged directory: {target}"
             ) from None
-        if previous.get("gendiff_diff_format") != 1:
+        if previous.get("semantiseq_diff_format") != 1:
             raise ValueError(f"refusing to replace unmanaged directory: {target}")
 
     with TemporaryDirectory(prefix=f".{target.name}.", dir=target.parent) as root:

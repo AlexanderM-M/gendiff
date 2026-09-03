@@ -40,7 +40,7 @@ def digest(value: Any) -> int:
     """Hash a canonical value; suitable for headers and public helpers."""
     payload = pickle.dumps(normalize(value), protocol=4)
     return int.from_bytes(
-        hashlib.blake2b(payload, digest_size=32, person=b"gendiff-v2").digest(),
+        hashlib.blake2b(payload, digest_size=32, person=b"semantiseq-v2").digest(),
         "big",
     )
 
@@ -49,14 +49,14 @@ def digest_native(value: Any) -> int:
     """Hash an internally constructed value without redundant normalization."""
     payload = pickle.dumps(value, protocol=5)
     return int.from_bytes(
-        hashlib.blake2b(payload, digest_size=32, person=b"gendiff-v2").digest(),
+        hashlib.blake2b(payload, digest_size=32, person=b"semantiseq-v2").digest(),
         "big",
     )
 
 
 def digest_parts(parts: list[int]) -> int:
     """Hash already-computed field digests into one logical record digest."""
-    hasher = hashlib.blake2b(digest_size=32, person=b"gendiff-rec-v1")
+    hasher = hashlib.blake2b(digest_size=32, person=b"semantiseq-r-v1")
     for part in parts:
         hasher.update(part.to_bytes(32, "big"))
     return int.from_bytes(hasher.digest(), "big")

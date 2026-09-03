@@ -10,13 +10,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-from gendiff.alignment import _scan as scan_alignment
-from gendiff.batch import BatchEntry, read_manifest
-from gendiff.compare import _kind
-from gendiff.fingerprint import Fingerprint, digest
-from gendiff.profiles import fields_for
-from gendiff.variant import _normalize as normalize_variant
-from gendiff.variant import _scan as scan_variant
+from semantiseq.alignment import _scan as scan_alignment
+from semantiseq.batch import BatchEntry, read_manifest
+from semantiseq.compare import _kind
+from semantiseq.fingerprint import Fingerprint, digest
+from semantiseq.profiles import fields_for
+from semantiseq.variant import _normalize as normalize_variant
+from semantiseq.variant import _scan as scan_variant
 
 
 class BaselineError(ValueError):
@@ -57,7 +57,7 @@ def _scan_entry(
     kind = _kind(path)
     fields = fields_for(kind, entry.profile)
     reference_digest = _file_digest(entry.reference) if entry.reference else None
-    with TemporaryDirectory(prefix="gendiff-baseline-") as work:
+    with TemporaryDirectory(prefix="semantiseq-baseline-") as work:
         scan_path = path
         if kind == "variant" and entry.normalize:
             if entry.reference is None:
@@ -120,7 +120,7 @@ def create_baseline(
         for entry in entries
     ]
     return {
-        "gendiff_baseline_format": 1,
+        "semantiseq_baseline_format": 1,
         "privacy": "Contains semantic hashes and counts; no genomic records or loci.",
         "settings": {
             "ignore_tags": list(ignore_tags),
@@ -159,7 +159,7 @@ def _read_baseline(path: Path) -> Dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         raise BaselineError(f"invalid baseline JSON: {error}") from error
-    if not isinstance(payload, dict) or payload.get("gendiff_baseline_format") != 1:
+    if not isinstance(payload, dict) or payload.get("semantiseq_baseline_format") != 1:
         raise BaselineError("unsupported baseline format")
     if not isinstance(payload.get("comparisons"), list):
         raise BaselineError("baseline comparisons must be an array")
@@ -273,7 +273,7 @@ def check_baseline(
 def baseline_report(checks: Sequence[BaselineCheck]) -> Dict[str, Any]:
     passed = sum(item.passed for item in checks)
     return {
-        "gendiff_baseline_check_format": 1,
+        "semantiseq_baseline_check_format": 1,
         "passed": passed == len(checks),
         "summary": {
             "comparisons": len(checks),

@@ -8,7 +8,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
-from gendiff.model import ComparisonResult
+from semantiseq.model import ComparisonResult
 
 
 class PolicyError(ValueError):
@@ -164,11 +164,11 @@ def load_policy(path: Path) -> PolicyDocument:
     except json.JSONDecodeError as error:
         raise PolicyError(f"invalid policy JSON: {error}") from error
     root = _mapping(payload, "policy")
-    unknown = sorted(set(root) - {"gendiff_policy", "defaults", "rules"})
+    unknown = sorted(set(root) - {"semantiseq_policy", "defaults", "rules"})
     if unknown:
         raise PolicyError(f"policy has unknown keys: {', '.join(unknown)}")
-    if root.get("gendiff_policy") != 1:
-        raise PolicyError("gendiff_policy must be 1")
+    if root.get("semantiseq_policy") != 1:
+        raise PolicyError("semantiseq_policy must be 1")
     defaults = {"transition_default": "fail"}
     defaults.update(
         _validated_settings(_mapping(root.get("defaults", {}), "defaults"), "defaults")

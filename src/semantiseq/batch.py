@@ -11,10 +11,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from gendiff.artifacts import output_workspace, safe_slug, write_manifest
-from gendiff.compare import GenDiffError, compare_files
-from gendiff.model import ComparisonResult
-from gendiff.policy import (
+from semantiseq.artifacts import output_workspace, safe_slug, write_manifest
+from semantiseq.compare import SemantiSeqError, compare_files
+from semantiseq.model import ComparisonResult
+from semantiseq.policy import (
     BatchPolicy,
     PolicyDocument,
     evaluate_policy,
@@ -99,7 +99,7 @@ class BatchResult:
     def to_dict(self) -> Dict[str, Any]:
         passed = sum(item.passed for item in self.items)
         return {
-            "gendiff_batch_format": 1,
+            "semantiseq_batch_format": 1,
             "passed": self.passed,
             "manifest": str(self.manifest),
             "summary": {
@@ -236,7 +236,7 @@ def _compare_entry(
             track_dir=track_dir,
             cache_dir=cache_dir,
         )
-    except (GenDiffError, OSError, ValueError) as error:
+    except (SemantiSeqError, OSError, ValueError) as error:
         raise BatchError(f"{entry.sample} / {entry.stage}: {error}") from error
     effective, matched = resolve_policy(
         policy,
@@ -439,7 +439,7 @@ def compare_manifest(
             write_manifest(
                 diff_workspace / "manifest.json",
                 {
-                    "gendiff_diff_format": 1,
+                    "semantiseq_diff_format": 1,
                     "kind": "batch",
                     "comparisons": [
                         {
@@ -460,7 +460,7 @@ def compare_manifest(
             write_manifest(
                 track_workspace / "manifest.json",
                 {
-                    "gendiff_diff_format": 1,
+                    "semantiseq_diff_format": 1,
                     "kind": "batch-tracks",
                     "comparisons": [
                         {

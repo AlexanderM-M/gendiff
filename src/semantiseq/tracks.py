@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
-from gendiff.artifacts import output_workspace, write_manifest
+from semantiseq.artifacts import output_workspace, write_manifest
 
 _WINDOW = 1_000_000
 
@@ -94,7 +94,7 @@ def write_tracks(
         write_manifest(
             workspace / "manifest.json",
             {
-                "gendiff_diff_format": 1,
+                "semantiseq_diff_format": 1,
                 "kind": "genomic-tracks",
                 "coordinate_systems": {
                     "bed": "zero-based, half-open",

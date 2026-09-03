@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from gendiff.cli import main
+from semantiseq.cli import main
 
 
 def test_missing_file_returns_error(capsys, tmp_path: Path) -> None:
@@ -170,7 +170,7 @@ def test_reproducibility_manifest_contains_checksums(tmp_path: Path) -> None:
     payload = json.loads(manifest.read_text())
 
     assert status == 0
-    assert payload["gendiff_reproducibility_format"] == 1
+    assert payload["semantiseq_reproducibility_format"] == 1
     assert len(payload["inputs"][0]["sha256"]) == 64
     assert payload["comparison"]["equivalent"] is True
 

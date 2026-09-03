@@ -1,13 +1,13 @@
-# GenDiff
+# SemantiSeq
 
-Semantic comparison for genomics files.
+Semantic comparison and regression testing for genomics files.
 
-GenDiff determines whether two files contain the same logical records, even when
+SemantiSeq determines whether two files contain the same logical records, even when
 record order, compression, or provenance metadata differ. It supports BAM/CRAM
 and VCF/BCF.
 
 ```text
-$ gendiff sample-a.merged.bam sample-b.merged.bam --explain
+$ semantiseq sample-a.merged.bam sample-b.merged.bam --explain
 Equivalent: no
 Type: alignment
 Relationship: different datasets
@@ -26,21 +26,21 @@ Record differences:
   Only in Sample B: 147,213
 ```
 
-![Example GenDiff comparison](assets/example-output.svg)
+![Example SemantiSeq comparison](assets/example-output.svg)
 
 ## Install
 
 Python 3.9 or newer is required.
 
 ```bash
-pip install gendiff
+pip install semantiseq
 ```
 
 For local development:
 
 ```bash
-git clone https://github.com/AlexanderM-M/gendiff.git
-cd gendiff
+git clone https://github.com/AlexanderM-M/semantiseq.git
+cd semantiseq
 python -m pip install -e '.[test]'
 pytest
 ```
@@ -48,35 +48,35 @@ pytest
 ## Usage
 
 ```bash
-gendiff OLD NEW
-gendiff old.bam new.bam --explain
-gendiff old.bam new.bam --profile mapping --ignore-tag MD
-gendiff old.cram new.cram --reference reference.fa
-gendiff old.vcf.gz new.bcf --normalize --reference reference.fa
-gendiff old.bam new.bam --html comparison.html
-gendiff old.bam new.bam --svg comparison.svg
-gendiff old.bam new.bam --write-diff diff-records
-gendiff old.bam new.bam --tracks genomic-tracks
-gendiff old.bam new.bam --difference-table differences.tsv.gz
-gendiff old.bam new.bam --region chr1:100000-200000
-gendiff old.bam new.bam --regions targets.bed --exclude-regions blacklist.bed
-gendiff old.bam new.bam --reference reference.fa --igv-batch differences.igv.batch
-gendiff old.bam new.bam --threads 8 --progress
-gendiff old.bam new.bam --cache /scratch/gendiff-cache
-gendiff old.bam new.bam --reproducibility comparison.json
-gendiff old.vcf.gz new.bcf --json
-gendiff batch comparisons.tsv --html regression.html --junit regression.xml
-gendiff manifest baseline-run candidate-run --output comparisons.tsv
-gendiff matrix run/*.bam --html cohort.html --cache /scratch/gendiff-cache
-gendiff identity old.vcf.gz new.vcf.gz
-gendiff identity old.bam new.bam --sites fingerprint-sites.vcf.gz
+semantiseq OLD NEW
+semantiseq old.bam new.bam --explain
+semantiseq old.bam new.bam --profile mapping --ignore-tag MD
+semantiseq old.cram new.cram --reference reference.fa
+semantiseq old.vcf.gz new.bcf --normalize --reference reference.fa
+semantiseq old.bam new.bam --html comparison.html
+semantiseq old.bam new.bam --svg comparison.svg
+semantiseq old.bam new.bam --write-diff diff-records
+semantiseq old.bam new.bam --tracks genomic-tracks
+semantiseq old.bam new.bam --difference-table differences.tsv.gz
+semantiseq old.bam new.bam --region chr1:100000-200000
+semantiseq old.bam new.bam --regions targets.bed --exclude-regions blacklist.bed
+semantiseq old.bam new.bam --reference reference.fa --igv-batch differences.igv.batch
+semantiseq old.bam new.bam --threads 8 --progress
+semantiseq old.bam new.bam --cache /scratch/semantiseq-cache
+semantiseq old.bam new.bam --reproducibility comparison.json
+semantiseq old.vcf.gz new.bcf --json
+semantiseq batch comparisons.tsv --html regression.html --junit regression.xml
+semantiseq manifest baseline-run candidate-run --output comparisons.tsv
+semantiseq matrix run/*.bam --html cohort.html --cache /scratch/semantiseq-cache
+semantiseq identity old.vcf.gz new.vcf.gz
+semantiseq identity old.bam new.bam --sites fingerprint-sites.vcf.gz
 ```
 
 Exit status is `0` when inputs are semantically equivalent, `1` when they differ,
 and `2` when comparison cannot be completed. JSON output is intended for CI and
 workflow integration.
 
-GenDiff compares all logical record fields and the structural parts of each
+SemantiSeq compares all logical record fields and the structural parts of each
 header. Record ordering, file encoding, and non-structural header metadata do not
 affect equivalence. The `strict`, `core`, `mapping`, `calls`, and `genotypes`
 profiles provide progressively focused comparisons for their supported formats.
@@ -90,7 +90,7 @@ storage. With indexed alignment files, both scanning and detailed matching are
 divided by contig when more than two threads are requested.
 
 `--cache DIR` reuses validated semantic scans and disk-backed matching data. The
-key includes the input path, size, nanosecond modification time, GenDiff version,
+key includes the input path, size, nanosecond modification time, SemantiSeq version,
 reference metadata, profile, ignored fields, and region filters. Completed input
 scans survive an interrupted comparison and are resumed on the next invocation.
 Caches created for detailed comparisons contain record summaries and should be
@@ -127,11 +127,11 @@ runtime.
 
 ## Cohorts and sample identity
 
-`gendiff matrix` scans each file once and creates a clustered semantic-similarity
+`semantiseq matrix` scans each file once and creates a clustered semantic-similarity
 matrix, with likely outliers highlighted. It accepts the normal profile,
 normalization, reference, and ignored-field options.
 
-`gendiff identity` compares genotype fingerprints and reports the best sample
+`semantiseq identity` compares genotype fingerprints and reports the best sample
 matches. VCF/BCF inputs work directly. Indexed BAM/CRAM inputs require a
 biallelic SNP panel through `--sites`; CRAM may additionally require
 `--reference`. Low-call results are reported as insufficient rather than treated
@@ -151,12 +151,12 @@ Sample B variants   baseline/B.vcf.gz       candidate/B.vcf.gz
 ```
 
 ```bash
-gendiff batch comparisons.tsv \
+semantiseq batch comparisons.tsv \
   --threads 16 \
   --html regression.html \
   --json regression.json \
   --junit regression.xml \
-  --multiqc gendiff_mqc.json \
+  --multiqc semantiseq_mqc.json \
   --write-diff differences
 ```
 
@@ -171,7 +171,7 @@ relative paths are resolved from the manifest directory.
 For stage-specific acceptance rules, pass a versioned JSON policy:
 
 ```bash
-gendiff batch comparisons.tsv --policy examples/policy.json --json gendiff-batch.json
+semantiseq batch comparisons.tsv --policy examples/policy.json --json semantiseq-batch.json
 ```
 
 Rules can match sample, stage, file kind, and profile. They support absolute and
@@ -180,7 +180,7 @@ error, warning, or informational severity. Reports record the matched rule and
 the decision trace. Unapproved transitions fail by default when a policy file is
 used, and later matching rules override earlier settings.
 
-To create the manifest from matching directory trees, use `gendiff manifest`.
+To create the manifest from matching directory trees, use `semantiseq manifest`.
 It pairs relative paths exactly and stops if either tree has missing or ambiguous
 files. Add `--dry-run` to inspect the TSV without writing it.
 
@@ -188,8 +188,8 @@ Compact baselines preserve semantic hashes and counts without storing read names
 loci, sequences, or whole input files:
 
 ```bash
-gendiff baseline create comparisons.tsv --output pipeline-baseline.gendiff.json
-gendiff baseline check pipeline-baseline.gendiff.json comparisons.tsv
+semantiseq baseline create comparisons.tsv --output pipeline-baseline.semantiseq.json
+semantiseq baseline check pipeline-baseline.semantiseq.json comparisons.tsv
 ```
 
 Baseline checks detect changes to logical fields and structural headers. Keep the
@@ -198,12 +198,11 @@ may be needed later.
 
 The aggregate JSON is intended for automation, JUnit integrates with CI systems,
 and filenames ending in `_mqc.json` are discovered by MultiQC as custom content.
-Installing `gendiff[multiqc]` also provides a native MultiQC module; name the
-aggregate JSON `gendiff-batch.json` so it is discovered automatically.
+Installing `semantiseq[multiqc]` also provides a native MultiQC module; name the
+aggregate JSON `semantiseq-batch.json` so it is discovered automatically.
 
-Some Linux distributions provide an unrelated `/usr/bin/gendiff`; install GenDiff
-in a virtual environment or invoke it as `python -m gendiff`. GenDiff is not a
-substitute for assay validation.
+SemantiSeq can also be invoked as `python -m semantiseq`. It is not a substitute
+for assay validation.
 
 ## License
 

@@ -1,5 +1,5 @@
 {
-  "gendiff_policy": 1,
+  "semantiseq_policy": 1,
   "defaults": {
     "max_modified": 0,
     "max_only": 0,

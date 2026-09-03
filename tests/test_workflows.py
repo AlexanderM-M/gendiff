@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pysam
 
-from gendiff.baseline import baseline_report, check_baseline, create_baseline
-from gendiff.batch import BatchPolicy, compare_manifest
-from gendiff.cli import main
-from gendiff.policy import load_policy
+from semantiseq.baseline import baseline_report, check_baseline, create_baseline
+from semantiseq.batch import BatchPolicy, compare_manifest
+from semantiseq.cli import main
+from semantiseq.policy import load_policy
 
 
 def _write_vcf(path: Path, genotype=(0, 1)) -> None:
@@ -39,7 +39,7 @@ def test_stage_policy_records_warnings_and_trace(tmp_path: Path) -> None:
     policy_path.write_text(
         json.dumps(
             {
-                "gendiff_policy": 1,
+                "semantiseq_policy": 1,
                 "defaults": {
                     "max_modified": None,
                     "transition_default": "allow",
@@ -109,7 +109,7 @@ def test_compact_baseline_detects_candidate_change(tmp_path: Path) -> None:
     same = tmp_path / "same.vcf"
     changed = tmp_path / "changed.vcf"
     manifest = tmp_path / "comparisons.tsv"
-    baseline_path = tmp_path / "baseline.gendiff.json"
+    baseline_path = tmp_path / "baseline.semantiseq.json"
     _write_vcf(before)
     _write_vcf(same)
     _write_vcf(changed, genotype=(1, 1))

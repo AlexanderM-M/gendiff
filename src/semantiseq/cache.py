@@ -8,8 +8,8 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Dict, Optional
 
-from gendiff import __version__
-from gendiff.fingerprint import Fingerprint, Sketch
+from semantiseq import __version__
+from semantiseq.fingerprint import Fingerprint, Sketch
 
 
 def cache_key(path: Path, settings: Dict[str, Any]) -> str:
@@ -106,7 +106,7 @@ def store_entry(
     cache_dir.mkdir(parents=True, exist_ok=True)
     summary = cache_dir / f"{key}.json"
     with NamedTemporaryFile(
-        "w", encoding="utf-8", dir=cache_dir, prefix=".gendiff-", delete=False
+        "w", encoding="utf-8", dir=cache_dir, prefix=".semantiseq-", delete=False
     ) as handle:
         temporary = Path(handle.name)
         json.dump(encode_scan(scan), handle, separators=(",", ":"), sort_keys=True)
@@ -114,7 +114,7 @@ def store_entry(
     if details_source is not None:
         target = cache_dir / f"{key}.sqlite"
         with NamedTemporaryFile(
-            dir=cache_dir, prefix=".gendiff-", delete=False
+            dir=cache_dir, prefix=".semantiseq-", delete=False
         ) as handle:
             temporary_details = Path(handle.name)
         try:

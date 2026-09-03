@@ -10,10 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
-from gendiff.difference_table import DifferenceTableWriter
-from gendiff.fingerprint import normalize
-from gendiff.metrics import MetricCounts, distribution_shifts
-from gendiff.model import DifferenceDetails
+from semantiseq.difference_table import DifferenceTableWriter
+from semantiseq.fingerprint import normalize
+from semantiseq.metrics import MetricCounts, distribution_shifts
+from semantiseq.model import DifferenceDetails
 
 _DIGEST_BYTES = 32
 

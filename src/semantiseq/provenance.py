@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
-from gendiff import __version__
-from gendiff.model import ComparisonResult
+from semantiseq import __version__
+from semantiseq.model import ComparisonResult
 
 
 def _sha256(path: Path) -> str:
@@ -28,10 +28,10 @@ def reproducibility_manifest(
         for path in (result.left, result.right)
     ]
     return {
-        "gendiff_reproducibility_format": 1,
-        "gendiff_version": __version__,
+        "semantiseq_reproducibility_format": 1,
+        "semantiseq_version": __version__,
         "generated_utc": datetime.now(timezone.utc).isoformat(),
-        "command": ["gendiff", *argv],
+        "command": ["semantiseq", *argv],
         "duration_seconds": round(duration_seconds, 6),
         "inputs": inputs,
         "reference": (

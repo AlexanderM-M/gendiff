@@ -10,7 +10,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Dict, Iterable, List
 
-from gendiff.model import ComparisonResult
+from semantiseq.model import ComparisonResult
 
 
 def _bar_rows(values: Dict[str, int]) -> str:
@@ -333,7 +333,7 @@ def render_html(result: ComparisonResult) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GenDiff report</title>
+<title>SemantiSeq report</title>
 <style>
 :root{{--bg:#f6f8fa;--panel:#fff;--text:#1f2328;--muted:#59636e;--line:#d0d7de;
 --accent:#0969da;--ok:#1a7f37;--bad:#cf222e}}*{{box-sizing:border-box}}
@@ -398,7 +398,7 @@ th{{background:#f6f8fa}}
 </style>
 </head>
 <body><main>
-<h1>GenDiff</h1><div class="status {status_class}">{status}</div>
+<h1>SemantiSeq</h1><div class="status {status_class}">{status}</div>
 <section><h2>Summary</h2><dl class="summary">
 <dt>Identity overlap</dt><dd>{result.identity_overlap:.1%}</dd>
 <dt>Content similarity</dt><dd>{result.content_similarity:.1%}</dd>
@@ -511,7 +511,7 @@ def render_svg(result: ComparisonResult) -> str:
                 f"{escape(_short(finding, 120))}</text>"
             )
     title_text = escape(
-        f"GenDiff comparison: {result.left_label} and {result.right_label}"
+        f"SemantiSeq comparison: {result.left_label} and {result.right_label}"
     )
     left_name = escape(_short(result.left_label))
     right_name = escape(_short(result.right_label))
@@ -537,7 +537,7 @@ text{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#1
 <rect width="1120" height="{height}" fill="#f6f8fa"/>
 <rect x="24" y="24" width="1072" height="{height - 48}" rx="12" fill="#fff"
  stroke="#d0d7de"/>
-<text x="48" y="70" class="title">GenDiff</text>
+<text x="48" y="70" class="title">SemantiSeq</text>
 <text x="1048" y="66" class="status" text-anchor="end"
  style="fill:{status_color}">{status}</text>
 <rect x="48" y="88" width="488" height="86" rx="8" fill="#f6f8fa"

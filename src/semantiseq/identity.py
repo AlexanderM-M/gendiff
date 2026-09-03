@@ -50,7 +50,7 @@ class IdentityResult:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "gendiff_identity_format": 1,
+            "semantiseq_identity_format": 1,
             "passed": self.passed,
             "best_matches": [pair.to_dict() for pair in self.best_matches],
             "pairs": [pair.to_dict() for pair in self.pairs],
@@ -96,7 +96,7 @@ def _variant_database(path: Path, database: Path) -> Tuple[str, ...]:
 
 
 def _variant_identity(first: Path, second: Path) -> IdentityResult:
-    with TemporaryDirectory(prefix="gendiff-identity-") as work:
+    with TemporaryDirectory(prefix="semantiseq-identity-") as work:
         workspace = Path(work)
         first_db, second_db = workspace / "first.sqlite", workspace / "second.sqlite"
         first_samples = _variant_database(first, first_db)

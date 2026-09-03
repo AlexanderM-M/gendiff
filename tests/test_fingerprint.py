@@ -1,4 +1,4 @@
-from gendiff.fingerprint import digest
+from semantiseq.fingerprint import digest
 
 
 def test_digest_is_typed_and_canonical() -> None:

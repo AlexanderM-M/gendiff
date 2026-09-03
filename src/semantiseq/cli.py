@@ -7,29 +7,29 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from gendiff import __version__
-from gendiff.baseline import (
+from semantiseq import __version__
+from semantiseq.baseline import (
     BaselineError,
     baseline_report,
     check_baseline,
     create_baseline,
 )
-from gendiff.batch import BatchError, BatchPolicy, compare_manifest
-from gendiff.batch_report import (
+from semantiseq.batch import BatchError, BatchPolicy, compare_manifest
+from semantiseq.batch_report import (
     render_batch_html,
     render_batch_text,
     render_junit,
     render_multiqc,
 )
-from gendiff.compare import GenDiffError, compare_files
-from gendiff.identity import compare_identity, render_identity
-from gendiff.manifest import ManifestError, pair_directories, render_manifest
-from gendiff.matrix import compare_matrix, render_matrix_html, render_matrix_text
-from gendiff.model import ComparisonResult
-from gendiff.policy import PolicyError, load_policy
-from gendiff.profiles import ALL_PROFILES
-from gendiff.provenance import reproducibility_manifest
-from gendiff.report import render_html, render_igv_batch, render_svg, write_text
+from semantiseq.compare import SemantiSeqError, compare_files
+from semantiseq.identity import compare_identity, render_identity
+from semantiseq.manifest import ManifestError, pair_directories, render_manifest
+from semantiseq.matrix import compare_matrix, render_matrix_html, render_matrix_text
+from semantiseq.model import ComparisonResult
+from semantiseq.policy import PolicyError, load_policy
+from semantiseq.profiles import ALL_PROFILES
+from semantiseq.provenance import reproducibility_manifest
+from semantiseq.report import render_html, render_igv_batch, render_svg, write_text
 
 
 def _positive_int(value: str) -> int:
@@ -55,11 +55,11 @@ def _proportion(value: str) -> float:
 
 def _single_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gendiff",
+        prog="semantiseq",
         description="Compare the logical contents of two genomics files.",
         epilog=(
             "Subcommands: batch, baseline, manifest, matrix, and identity. "
-            "Run 'gendiff COMMAND --help' for details."
+            "Run 'semantiseq COMMAND --help' for details."
         ),
     )
     parser.add_argument("sample_a", type=Path, help="first BAM, CRAM, VCF, or BCF")
@@ -173,7 +173,7 @@ def _single_parser() -> argparse.ArgumentParser:
 
 def _batch_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gendiff batch",
+        prog="semantiseq batch",
         description="Compare baseline and candidate pipeline outputs from a TSV.",
     )
     parser.add_argument(
@@ -296,7 +296,7 @@ def _batch_parser() -> argparse.ArgumentParser:
 
 def _manifest_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gendiff manifest",
+        prog="semantiseq manifest",
         description="Pair matching genomics files in two directory trees.",
     )
     parser.add_argument("baseline", type=Path, help="baseline output directory")
@@ -311,7 +311,7 @@ def _manifest_parser() -> argparse.ArgumentParser:
 
 def _matrix_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gendiff matrix",
+        prog="semantiseq matrix",
         description="Compare many genomics files in a similarity matrix.",
     )
     parser.add_argument("files", nargs="+", type=Path)
@@ -330,7 +330,7 @@ def _matrix_parser() -> argparse.ArgumentParser:
 
 def _identity_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gendiff identity",
+        prog="semantiseq identity",
         description="Check whether two files represent the same biological sample.",
     )
     parser.add_argument("sample_a", type=Path)
@@ -345,7 +345,7 @@ def _identity_parser() -> argparse.ArgumentParser:
 
 def _baseline_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gendiff baseline",
+        prog="semantiseq baseline",
         description="Create or check compact semantic baselines.",
     )
     commands = parser.add_subparsers(dest="baseline_command", required=True)
@@ -556,8 +556,8 @@ def _single_main(argv: List[str]) -> int:
                 args.force,
             )
             print(f"Wrote {args.reproducibility}", file=sys.stderr)
-    except (GenDiffError, OSError, ValueError) as error:
-        print(f"gendiff: error: {error}", file=sys.stderr)
+    except (SemantiSeqError, OSError, ValueError) as error:
+        print(f"semantiseq: error: {error}", file=sys.stderr)
         return 2
 
     if args.json:
@@ -640,8 +640,8 @@ def _batch_main(argv: List[str]) -> int:
             print(f"Wrote {args.write_diff}", file=sys.stderr)
         if args.tracks:
             print(f"Wrote {args.tracks}", file=sys.stderr)
-    except (BatchError, GenDiffError, PolicyError, OSError, ValueError) as error:
-        print(f"gendiff: error: {error}", file=sys.stderr)
+    except (BatchError, SemantiSeqError, PolicyError, OSError, ValueError) as error:
+        print(f"semantiseq: error: {error}", file=sys.stderr)
         return 2
     print(render_batch_text(result))
     return 0 if result.passed else 1
@@ -658,7 +658,7 @@ def _manifest_main(argv: List[str]) -> int:
             write_text(args.output, content, args.force)
             print(f"Wrote {args.output} ({len(pairs)} comparisons)")
     except (ManifestError, OSError, ValueError) as error:
-        print(f"gendiff: error: {error}", file=sys.stderr)
+        print(f"semantiseq: error: {error}", file=sys.stderr)
         return 2
     return 0
 
@@ -696,8 +696,8 @@ def _matrix_main(argv: List[str]) -> int:
             )
         print(render_matrix_text(result))
         return 0
-    except (GenDiffError, OSError, ValueError) as error:
-        print(f"gendiff: error: {error}", file=sys.stderr)
+    except (SemantiSeqError, OSError, ValueError) as error:
+        print(f"semantiseq: error: {error}", file=sys.stderr)
         return 2
 
 
@@ -736,7 +736,7 @@ def _identity_main(argv: List[str]) -> int:
         print(render_identity(result))
         return 0 if result.passed else 1
     except (OSError, ValueError) as error:
-        print(f"gendiff: error: {error}", file=sys.stderr)
+        print(f"semantiseq: error: {error}", file=sys.stderr)
         return 2
 
 
@@ -794,8 +794,8 @@ def _baseline_main(argv: List[str]) -> int:
                 f"{item.stage}{fields}"
             )
         return 0 if report["passed"] else 1
-    except (BaselineError, BatchError, GenDiffError, OSError, ValueError) as error:
-        print(f"gendiff: error: {error}", file=sys.stderr)
+    except (BaselineError, BatchError, SemantiSeqError, OSError, ValueError) as error:
+        print(f"semantiseq: error: {error}", file=sys.stderr)
         return 2
 
 

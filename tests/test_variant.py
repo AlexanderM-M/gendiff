@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pysam
 
-from gendiff.compare import compare_files
-from gendiff.identity import compare_identity
-from gendiff.matrix import compare_matrix
+from semantiseq.compare import compare_files
+from semantiseq.identity import compare_identity
+from semantiseq.matrix import compare_matrix
 
 
 def _write_vcf(

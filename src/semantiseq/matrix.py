@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-from gendiff.compare import compare_files
+from semantiseq.compare import compare_files
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ class MatrixResult:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "gendiff_matrix_format": 1,
+            "semantiseq_matrix_format": 1,
             "files": [
                 {"label": label, "path": str(path)}
                 for label, path in zip(self.labels, self.files)
@@ -114,7 +114,7 @@ def compare_matrix(
 
     if cache_dir:
         return run(cache_dir)
-    with TemporaryDirectory(prefix="gendiff-matrix-") as temporary:
+    with TemporaryDirectory(prefix="semantiseq-matrix-") as temporary:
         return run(Path(temporary))
 
 
@@ -155,7 +155,7 @@ def render_matrix_html(result: MatrixResult) -> str:
     )
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GenDiff similarity matrix</title><style>
+<title>SemantiSeq similarity matrix</title><style>
 body{{font:14px/1.4 system-ui,sans-serif;color:#1f2328;margin:32px}}
 main{{max-width:1200px;margin:auto}}h1{{margin-bottom:4px}}p{{color:#59636e}}
 .matrix{{overflow:auto;border:1px solid #d0d7de;border-radius:8px;padding:12px}}
@@ -163,7 +163,7 @@ table{{border-collapse:separate;border-spacing:3px}}th{{text-align:right;max-wid
 overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}thead th span{{display:block;
 writing-mode:vertical-rl;transform:rotate(180deg);height:150px}}td{{min-width:58px;
 height:42px;text-align:center;border-radius:4px;font-weight:600}}.warning{{color:#cf222e}}
-</style></head><body><main><h1>GenDiff similarity matrix</h1>
+</style></head><body><main><h1>SemantiSeq similarity matrix</h1>
 <p>{len(result.files)} files, grouped by semantic content similarity.</p>{outliers}
 <div class="matrix"><table><thead><tr><th></th>{headers}</tr></thead>
 <tbody>{"".join(rows)}</tbody></table></div></main></body></html>\n"""
